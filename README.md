@@ -56,8 +56,8 @@ wav-streamer/
 
 
 ## 👨‍💻 Pembagian Tugas Tim
-- **Member 1**: Server Core (`server.c`, `io_utils.c`) & POSIX Multi-threading.
-- **Member 2**: Protocol Engine (`protocol.c`, `pacing.c`, `ring_buffer.c`).
+- **Member 1 (Rafli)**: Server Core (`server.c`, `io_utils.c`) & POSIX Multi-threading.
+- **Member 2 (Imam)**: Protocol Engine (`protocol.c`, `pacing.c`, `ring_buffer.c`).
 - **Member 3 (Bintang)**: Client (`client.c`), Script Media (`generate_wav.sh`), Automated Testing (`test_*.sh`), Git Repo, & Captures.
 
 ## 🚀 Cara Menjalankan
