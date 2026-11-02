@@ -1,0 +1,55 @@
+# ============================================================================ #
+# PodFlow — Git Ignore Rules                                                   #
+# ============================================================================ #
+
+# 1. Compiled Object Files & Libraries
+*.o
+*.obj
+*.d
+*.a
+*.so
+
+# 2. Compiled Project Binaries (Root & Subdirectories)
+/server
+/client
+/test_protocol
+/test_protocol_asan
+/test_protocol_final
+/pacing_experiment
+*.out
+*.exe
+
+# 3. Generated WAV Media & Client Output Files
+#    (WAV files are generated locally via: bash media/generate_wav.sh)
+media/*.wav
+*.wav
+!media/generate_wav.sh
+
+# 4. Debugging, Sanitizers, Valgrind & Core Dumps
+core
+core.*
+vgcore.*
+*.log
+callgrind.out.*
+massif.out.*
+
+# 5. Temporary Packet Captures (Use 'git add -f captures/file.pcapng' for final submission)
+*.pcap
+*.pcapng
+
+# 6. Python Cache & Virtual Environments (for load_test.py & jitter_analyzer.py)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+
+# 7. Editor, IDE & OS Artifacts (VS Code, WSL2, Windows, macOS)
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
