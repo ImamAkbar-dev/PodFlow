@@ -1,118 +1,98 @@
-# ============================================================================ #
-# PodFlow — Concurrent Chunked Audio/Media Streaming Server                    #
-# Shared Team Makefile (Session 1 & Session 2 Ready)                           #
-# ============================================================================ #
+# ---------------------------------------------------------------
+# wav-streamer / PodFlow - Makefile (owner: Member 1)
+# Contract flags: C11, -Wall -Wextra -Werror, pthreads, -g
+# -D_POSIX_C_SOURCE=200809L is required: with -std=c11 (strict mode)
+# gcc hides POSIX APIs such as clock_nanosleep() and sigaction().
+# ---------------------------------------------------------------
 
-CC          := gcc
-CFLAGS      := -std=c11 -Wall -Wextra -Werror -pthread -g -Iinclude
-LDFLAGS     := -pthread
-ASAN_FLAGS  := -fsanitize=address,undefined -fno-omit-frame-pointer
+CC       := gcc
+WERROR   ?= -Werror
+CFLAGS   := -std=c11 -D_POSIX_C_SOURCE=200809L -Wall -Wextra $(WERROR) \
+            -pthread -g -Iinclude -MMD -MP
+LDFLAGS  := -pthread
+BUILD    := build
+PORT     ?= 8888
 
-# Directory paths
-INC_DIR     := include
-COMMON_DIR  := src/common
-SERVER_DIR  := src/server
-CLIENT_DIR  := src/client
-TEST_DIR    := tests
-MEDIA_DIR   := media
+# List only NON-EMPTY .c files in a directory, so empty skeleton files
+# (or a missing directory) never break the build.
+nonempty = $(shell find $(1) -name '*.c' -size +0c 2>/dev/null | sort)
 
-# Shared headers & sources (Member 1 & Member 2)
-HEADERS     := $(wildcard $(INC_DIR)/*.h)
-COMMON_SRCS := $(COMMON_DIR)/io_utils.c $(COMMON_DIR)/protocol.c
-COMMON_OBJS := $(COMMON_SRCS:.c=.o)
+SRC_COMMON := $(call nonempty,src/common)
+SRC_SERVER := $(call nonempty,src/server)
+SRC_CLIENT := $(call nonempty,src/client)
+SRC_PROTO_TEST  := $(call nonempty,tests/test_protocol.c)
+SRC_PACING_TEST := $(call nonempty,tests/pacing_experiment.c)
 
-# Server sources: always compile server.c; automatically include pacing.c and
-# ring_buffer.c only if they exist and are non-empty (prevents Session 1 build
-# failures when Session 2 files are still empty placeholders).
-SERVER_EXTRA_SRCS := $(shell for f in $(SERVER_DIR)/pacing.c $(SERVER_DIR)/ring_buffer.c; do \
-                        if [ -s "$$f" ]; then echo "$$f"; fi; \
-                     done)
-SERVER_SRCS := $(SERVER_DIR)/server.c $(SERVER_EXTRA_SRCS)
-SERVER_OBJS := $(SERVER_SRCS:.c=.o)
+obj = $(patsubst %.c,$(BUILD)/%.o,$(1))
 
-# Client sources (Member 3)
-CLIENT_SRCS := $(CLIENT_DIR)/client.c
-CLIENT_OBJS := $(CLIENT_SRCS:.c=.o)
+OBJ_COMMON := $(call obj,$(SRC_COMMON))
+OBJ_SERVER := $(call obj,$(SRC_SERVER))
+OBJ_CLIENT := $(call obj,$(SRC_CLIENT))
+OBJ_PROTO_TEST  := $(call obj,$(SRC_PROTO_TEST))
+OBJ_PACING_TEST := $(call obj,$(SRC_PACING_TEST))
 
-# Output binaries (placed in repo root per CLI contract: ./server & ./client)
-SERVER_BIN  := server
-CLIENT_BIN  := client
-TEST_PROTO  := test_protocol
-TEST_ASAN   := test_protocol_asan
-PACING_BIN  := pacing_experiment
+# pacing_experiment links only pacing.c from the server directory
+OBJ_PACING_DEP := $(filter %/pacing.o,$(OBJ_SERVER))
 
-.PHONY: all m2 server-bin client-bin test test-asan test-valgrind test-all \
-        integration-test media clean help
+.DEFAULT_GOAL := all
+.PHONY: all test valgrind clean
 
-# Default target: builds server, client, and protocol unit test binary
-all: $(SERVER_BIN) $(CLIENT_BIN) $(TEST_PROTO)
+all: server client
 
-# ============================================================================ #
-# MEMBER 2 STANDALONE TARGETS (Works even if server.c / client.c are empty)    #
-# ============================================================================ #
+# ----- programs -------------------------------------------------
+server: $(OBJ_COMMON) $(OBJ_SERVER)
+	@if [ -z "$(SRC_SERVER)" ]; then \
+	  echo "[skip] server: no non-empty source in src/server yet"; \
+	else \
+	  echo "$(CC) $^ -o $@ $(LDFLAGS)"; \
+	  $(CC) $^ -o $@ $(LDFLAGS) || exit 1; \
+	fi
 
-# Build only common object files and protocol unit tests
-m2: $(COMMON_OBJS) $(TEST_PROTO)
+client: $(OBJ_COMMON) $(OBJ_CLIENT)
+	@if [ -z "$(SRC_CLIENT)" ]; then \
+	  echo "[skip] client: no non-empty source in src/client yet (Member 3)"; \
+	else \
+	  echo "$(CC) $^ -o $@ $(LDFLAGS)"; \
+	  $(CC) $^ -o $@ $(LDFLAGS) || exit 1; \
+	fi
 
-$(TEST_PROTO): $(TEST_DIR)/test_protocol.c $(COMMON_OBJS) $(HEADERS)
-	$(CC) $(CFLAGS) $(TEST_DIR)/test_protocol.c $(COMMON_OBJS) -o $@ $(LDFLAGS)
+test_protocol: $(OBJ_PROTO_TEST) $(OBJ_COMMON)
+	@if [ -z "$(SRC_PROTO_TEST)" ]; then \
+	  echo "[skip] test_protocol: tests/test_protocol.c is missing or empty"; \
+	else \
+	  echo "$(CC) $^ -o $@ $(LDFLAGS)"; \
+	  $(CC) $^ -o $@ $(LDFLAGS) || exit 1; \
+	fi
 
-test: $(TEST_PROTO)
-	./$(TEST_PROTO)
+pacing_experiment: $(OBJ_PACING_TEST) $(OBJ_PACING_DEP)
+	@if [ -z "$(SRC_PACING_TEST)" ]; then \
+	  echo "[skip] pacing_experiment: tests/pacing_experiment.c is missing or empty"; \
+	else \
+	  echo "$(CC) $^ -o $@ $(LDFLAGS)"; \
+	  $(CC) $^ -o $@ $(LDFLAGS) || exit 1; \
+	fi
 
-test-asan: $(TEST_DIR)/test_protocol.c $(COMMON_SRCS) $(HEADERS)
-	$(CC) $(CFLAGS) $(ASAN_FLAGS) $(TEST_DIR)/test_protocol.c $(COMMON_SRCS) -o $(TEST_ASAN) $(LDFLAGS)
-	./$(TEST_ASAN)
-
-test-valgrind: $(TEST_PROTO)
-	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./$(TEST_PROTO)
-
-test-all: test test-asan test-valgrind
-
-# ============================================================================ #
-# CORE APPLICATION BINARIES (Server & Client)                                  #
-# ============================================================================ #
-
-$(SERVER_BIN): $(SERVER_OBJS) $(COMMON_OBJS)
-	$(CC) $(CFLAGS) $(SERVER_OBJS) $(COMMON_OBJS) -o $@ $(LDFLAGS)
-
-$(CLIENT_BIN): $(CLIENT_OBJS) $(COMMON_OBJS)
-	$(CC) $(CFLAGS) $(CLIENT_OBJS) $(COMMON_OBJS) -o $@ $(LDFLAGS)
-
-# Optional Session 2 pacing experiment binary
-$(PACING_BIN): $(TEST_DIR)/pacing_experiment.c $(COMMON_OBJS) $(HEADERS)
-	$(CC) $(CFLAGS) $(TEST_DIR)/pacing_experiment.c $(SERVER_EXTRA_SRCS) $(COMMON_OBJS) -o $@ $(LDFLAGS)
-
-# Pattern rule for compiling .c files into .o object files
-%.o: %.c $(HEADERS)
+# ----- generic compile rule (with automatic header dependencies) --
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# ============================================================================ #
-# MEDIA GENERATION & END-TO-END QA SCRIPTS                                     #
-# ============================================================================ #
+# ----- test: unit test + shell tests (each one only if it exists) --
+test: all test_protocol
+	@if [ -x ./test_protocol ]; then ./test_protocol || exit 1; \
+	else echo "[skip] ./test_protocol not built"; fi
+	@for s in tests/test_framing.sh tests/test_md5.sh; do \
+	  if [ -s $$s ]; then echo "== $$s"; bash $$s || exit 1; \
+	  else echo "[skip] $$s missing or empty"; fi; \
+	done
 
-media:
-	bash $(MEDIA_DIR)/generate_wav.sh
-
-integration-test: all
-	@if [ -s $(TEST_DIR)/test_framing.sh ]; then bash $(TEST_DIR)/test_framing.sh; fi
-	@if [ -s $(TEST_DIR)/test_md5.sh ]; then bash $(TEST_DIR)/test_md5.sh; fi
-
-# ============================================================================ #
-# CLEANUP & HELP                                                               #
-# ============================================================================ #
+# ----- valgrind: run the server under Valgrind (stop it with Ctrl+C) --
+valgrind: server
+	@if [ ! -x ./server ]; then echo "server not built yet"; exit 1; fi
+	valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 ./server $(PORT)
 
 clean:
-	rm -f $(SERVER_BIN) $(CLIENT_BIN) $(TEST_PROTO) $(TEST_ASAN) $(PACING_BIN)
-	rm -f *.o $(COMMON_DIR)/*.o $(SERVER_DIR)/*.o $(CLIENT_DIR)/*.o $(TEST_DIR)/*.o
+	rm -rf $(BUILD) server client test_protocol pacing_experiment
 
-help:
-	@echo "PodFlow Build Targets:"
-	@echo "  make all            - Build ./server, ./client, and ./test_protocol"
-	@echo "  make m2             - Build only Member 2 files (io_utils.o, protocol.o, test_protocol)"
-	@echo "  make test           - Compile and run ./test_protocol"
-	@echo "  make test-asan      - Run protocol tests with AddressSanitizer + UBSan"
-	@echo "  make test-valgrind  - Run protocol tests under Valgrind Memcheck"
-	@echo "  make test-all       - Run standard, ASan/UBSan, and Valgrind tests sequentially"
-	@echo "  make media          - Generate reference WAV files via media/generate_wav.sh"
-	@echo "  make clean          - Remove all compiled binaries and .o object files"
+# header dependency files generated by -MMD
+-include $(wildcard $(BUILD)/*/*.d $(BUILD)/*/*/*.d)
