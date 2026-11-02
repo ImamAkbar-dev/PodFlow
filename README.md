@@ -10,7 +10,7 @@ Proyek server media streaming berbasis C11 dan POSIX Sockets untuk mata kuliah P
 
 ## 📁 Struktur Repositori
 ```text
-wav-streamer/
+PodFlow/
 ├── Makefile                # Script kompilasi
 ├── README.md               # Dokumentasi proyek
 ├── .gitignore              # Abaikan file biner/media besar
