@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # ============================================================================ #
 # PodFlow — Git Ignore Rules                                                   #
 # ============================================================================ #
@@ -53,3 +54,28 @@ venv/
 *~
 .DS_Store
 Thumbs.db
+=======
+# File biner hasil kompilasi C
+*.o
+*.a
+*.so
+server
+client
+tests/test_protocol
+tests/pacing_experiment
+
+# File audio WAV (dibuat secara lokal oleh masing-masing anggota)
+media/*.wav
+!media/.gitkeep
+
+# Tangkapan Paket Jaringan
+captures/*.pcap
+!captures/README_captures.md
+!captures/.gitkeep
+
+# Temp / Log
+*.log
+*.tmp
+.vscode/
+.idea/
+>>>>>>> 6e0c7e6 (feat(repo): initial skeleton, gitignore, and readme setup)
