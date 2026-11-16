@@ -1,67 +1,42 @@
-# Concurrent Chunked Audio/Media Streaming Server (wav-streamer)
+# PodFlow — Concurrent Chunked Audio/Podcast Streaming Server
 
-Proyek server media streaming berbasis C11 dan POSIX Sockets untuk mata kuliah Pemrograman Jaringan. Sistem ini mengalirkan audio WAV secara chunked menggunakan protokol biner kustom 16-byte di atas TCP (Port 8888).
+**PodFlow** is a high-performance, concurrent chunked audio streaming server and client suite written in C11 using POSIX sockets and `pthreads`. It streams uncompressed PCM WAV audio over TCP (Port 8888) using a custom 16-byte big-endian binary framing protocol with real-time 50 ms pacing, interactive playback controls (`PLAY`, `PAUSE`, `SEEK`, `STOP`), and a lock-aware ring buffer architecture.
 
-## 🛠️ Spesifikasi Kunci
-- **Bahasa**: C11 (`-std=c11 -Wall -Wextra -Werror -pthread -g`)
-- **Port Default**: `8888`
-- **Ukuran Chunk PCM Default**: `8820` byte (0.05 detik audio PCM 44.1kHz 16-bit Stereo)
-- **Header Frame**: `16` byte (Network Byte Order / Big-Endian)
+---
 
-## 📁 Struktur Repositori
+## 🏗️ System Architecture & Protocol Specs (v1.1)
+
+- **Language & Compiler**: C11 (`gcc -std=c11 -D_GNU_SOURCE -Wall -Wextra -Werror -pthread -g`)
+- **Transport**: TCP on Port `8888` (`TCP_NODELAY` enabled, `SO_SNDTIMEO = 5s`)
+- **Framing**: 16-byte Big-Endian Header (`magic: 0x5753`, `version: 1`, `msg_type`, `seq_num`, `payload_len`, `param`)
+- **Audio Payload**: Canonical 44-byte header WAV (PCM 16-bit, 44.1 kHz, Stereo). Each chunk is `8820` bytes (50 ms of audio).
+- **Concurrency Model**:
+  - **Connection Thread** (1 per client): Handles socket I/O via `ppoll()`, dispatches control commands, and enforces drift-free `CLOCK_MONOTONIC` 50 ms pacing.
+  - **Producer Thread** (1 per session): Reads WAV chunks from disk into a 40-slot (2-second) `ring_buffer_t` with epoch-based flushing for instant `SEEK`.
+
+---
+
+## 📁 Repository Layout
+
 ```text
-PodFlow/
-├── Makefile                # Script kompilasi
-├── README.md               # Dokumentasi proyek
-├── .gitignore              # Abaikan file biner/media besar
-├── include/                # Header file C (.h)
-├── src/                    # Source code C (.c)
-│   ├── common/             # Protocol & IO utils
-│   ├── server/             # Code server
-│   └── client/             # Code client
-├── media/                  # Generator file audio WAV
-├── tests/                  # Script pengujian otomatis
-└── captures/               # Analisis Wireshark/tcpdump
-
-Langkah 4: Buat File README.md
-File ini adalah halaman petunjuk utama untuk kelompok kamu dan dosen/asisten praktikum.
-
-Buat file baru bernama README.md di folder paling luar (wav-streamer/README.md), lalu isi dengan:
-
-File: wav-streamer/README.md
-Markdown
-# Concurrent Chunked Audio/Media Streaming Server (wav-streamer)
-
-Proyek server media streaming berbasis C11 dan POSIX Sockets untuk mata kuliah Pemrograman Jaringan. Sistem ini mengalirkan audio WAV secara chunked menggunakan protokol biner kustom 16-byte di atas TCP (Port 8888).
-
-## 🛠️ Spesifikasi Kunci
-- **Bahasa**: C11 (`-std=c11 -Wall -Wextra -Werror -pthread -g`)
-- **Port Default**: `8888`
-- **Ukuran Chunk PCM Default**: `8820` byte (0.05 detik audio PCM 44.1kHz 16-bit Stereo)
-- **Header Frame**: `16` byte (Network Byte Order / Big-Endian)
-
-## 📁 Struktur Repositori
-wav-streamer/
-├── Makefile                # Script kompilasi
-├── README.md               # Dokumentasi proyek
-├── .gitignore              # Abaikan file biner/media besar
-├── include/                # Header file C (.h)
-├── src/                    # Source code C (.c)
-│   ├── common/             # Protocol & IO utils
-│   ├── server/             # Code server
-│   └── client/             # Code client
-├── media/                  # Generator file audio WAV
-├── tests/                  # Script pengujian otomatis
-└── captures/               # Analisis Wireshark/tcpdump
-
-
-## 👨‍💻 Pembagian Tugas Tim
-- **Member 1 (Rafli)**: Server Core (`server.c`, `io_utils.c`) & POSIX Multi-threading.
-- **Member 2 (Imam)**: Protocol Engine (`protocol.c`, `pacing.c`, `ring_buffer.c`).
-- **Member 3 (Bintang)**: Client (`client.c`), Script Media (`generate_wav.sh`), Automated Testing (`test_*.sh`), Git Repo, & Captures.
-
-## 🚀 Cara Menjalankan
-1. **Generate Media**: `./media/generate_wav.sh`
-2. **Kompilasi**: `make clean && make`
-3. **Jalankan Server**: `./server 8888`
-4. **Jalankan Client**: `./client get 127.0.0.1 8888 sample_30s.wav output.wav`
+podflow/
+├── Makefile                        # Build targets for server, client, and C unit tests
+├── README.md                       # Project documentation and quickstart guide
+├── .gitignore                      # Ignores binaries, WAVs, and PCAPs; tracks results/
+├── Dockerfile                      # Optional containerized build environment
+├── docker-compose.yml              # Container orchestration
+├── include/                        # Shared header contracts
+│   ├── protocol.h                  # Wire framing & error codes
+│   ├── io_utils.h                  # EINTR-safe readn/writen
+│   ├── pacing.h                    # CLOCK_MONOTONIC drift-free pacer
+│   ├── ring_buffer.h               # Thread-safe bounded ring buffer with epoch
+│   └── stream_session.h            # Playback state machine (IDLE/PLAYING/PAUSED)
+├── src/
+│   ├── common/                     # io_utils.c, protocol.c
+│   ├── server/                     # server.c, pacing.c, ring_buffer.c, stream_session.c
+│   └── client/                     # client.c (echo, play/get, scripted control, CSV logger)
+├── media/                          # generate_wav.sh (creates sample_30s, sample_5m, sample_tail)
+├── tests/                          # Automated bash & Python verification/benchmark suites
+├── captures/                       # tcpdump & Wireshark inspection guides
+├── results/                        # Benchmark CSVs and matplotlib PNG plots
+└── docs/                           # Protocol spec, load-test/Wireshark report, demo script
