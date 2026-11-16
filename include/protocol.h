@@ -1,8 +1,8 @@
 /**
  * @file protocol.h
- * @brief Frozen Wire Protocol Contract for PodFlow (Concurrent Audio Streamer).
+ * @brief Frozen Wire Protocol Contract v1.1 for PodFlow.
  *
- * Owner: Member 2 (Protocol & Framing)
+ * Owner: Member 2 (Protocol, Ring Buffer, Stream Session)
  * Standard: C11, POSIX Sockets, Big-Endian (Network Byte Order) Wire Format.
  */
 
@@ -30,7 +30,7 @@ extern "C" {
 #define MAX_PAYLOAD_SIZE  65536U    /* Hard upper bound on frame payload (64K) */
 #define FRAME_HEADER_SIZE 16U       /* Wire header size in bytes               */
 
-#define WELCOME_BANNER    "wav-streamer/1"
+#define WELCOME_BANNER    "podflow/1"
 
 /* ========================================================================== *
  * 2. MESSAGE TYPES (u8 on wire)                                              *
@@ -44,9 +44,9 @@ typedef enum {
     WELCOME = 0x02,
     LIST    = 0x03,
     PLAY    = 0x04,
-    PAUSE   = 0x05, /* Reserved/Planned for Session 2 (returns 300 in S1) */
-    SEEK    = 0x06, /* Reserved/Planned for Session 2 (returns 300 in S1) */
-    STOP    = 0x07, /* Reserved/Planned for Session 2 (returns 300 in S1) */
+    PAUSE   = 0x05,
+    SEEK    = 0x06,
+    STOP    = 0x07,
     DATA    = 0x08,
     END     = 0x09,
     ACK     = 0x0A,
@@ -84,6 +84,7 @@ typedef enum {
     SEEK_OUT_OF_RANGE = 202,
     INVALID_STATE     = 300,
     INTERNAL_SERVER   = 500,
+    SERVER_BUSY       = 503,
 
     /* Prefixed aliases */
     ERR_NONE              = 0,
@@ -95,7 +96,8 @@ typedef enum {
     ERR_INVALID_WAV       = 201,
     ERR_SEEK_OUT_OF_RANGE = 202,
     ERR_INVALID_STATE     = 300,
-    ERR_INTERNAL_SERVER   = 500
+    ERR_INTERNAL_SERVER   = 500,
+    ERR_SERVER_BUSY       = 503
 } proto_err_t;
 
 /* ========================================================================== *
