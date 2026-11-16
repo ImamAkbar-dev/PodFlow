@@ -1,8 +1,8 @@
 /**
  * @file protocol.c
- * @brief Implementation of PodFlow framing, serialization, and error helpers.
+ * @brief Implementation of PodFlow v1.1 framing, serialization, and error helpers.
  *
- * Owner: Member 2 (Protocol & Framing)
+ * Owner: Member 2 (Protocol, Ring Buffer, Stream Session)
  */
 
 #include "protocol.h"
@@ -168,6 +168,7 @@ const char *proto_err_name(uint32_t code)
         case SEEK_OUT_OF_RANGE: return "SEEK_OUT_OF_RANGE";
         case INVALID_STATE:     return "INVALID_STATE";
         case INTERNAL_SERVER:   return "INTERNAL_SERVER";
+        case SERVER_BUSY:       return "SERVER_BUSY";
         default:                return "UNKNOWN_ERR";
     }
 }
