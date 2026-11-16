@@ -1,48 +1,55 @@
-# PodFlow Wire Protocol Specification (v1.0)
+# PodFlow Wire Protocol Specification (v1.1)
 
-**Project:** Concurrent Chunked Audio/Media Streaming Server (`wav-streamer` / `PodFlow`)  
-**Protocol Identifier:** `wav-streamer/1` (`0x5753`, Version `1`)  
-**Document Owner:** Member 2 (Protocol & Framing Lead)  
-**Status:** Frozen for Session 1 / Active Reference for Session 2  
+**Project:** PodFlow Concurrent Audio Streamer (`PodFlow`)  
+**Protocol Identifier:** `podflow/1` (`0x5753`, Version `1`)  
+**Document Owner:** Member 2 (Protocol, Ring Buffer, Stream Session)  
+**Document Version:** `v1.1` (Sessions 2 & 3 Complete — Wire Contract, State Machine, Pacing & Client Error Matrix)  
 
 ---
 
 ## 1. Overview and Design Goals
 
-The **PodFlow Wire Protocol (WS v1)** is a deterministic, binary, length-prefixed application-layer framing protocol operating over TCP. It is designed to transport canonical 16-bit 44.1 kHz stereo PCM `.wav` audio streams from a multi-threaded POSIX C11 server to concurrent clients.
+The **PodFlow Wire Protocol (v1.1)** is a deterministic, binary, length-prefixed application-layer framing protocol operating over TCP. It enables a multi-threaded C11 server to stream canonical 16-bit, 44.1 kHz stereo PCM `.wav` audio to up to 1,000+ concurrent clients with real-time 50 ms pacing and interactive playback control (`PLAY`, `PAUSE`, `RESUME`, `SEEK`, `STOP`).
 
-### Core Design Goals
-1. **Explicit Message Framing Over Byte-Stream TCP:** TCP provides an unstructured, connection-oriented byte stream without inherent message boundaries. A single `send_frame()` call may be fragmented across multiple TCP segments or coalesced with subsequent frames. WS v1 prefixes every message with a fixed 16-byte header containing an explicit `payload_len` field so receivers can deterministically reconstruct exact frame boundaries via `readn()`.
-2. **Zero-Ambiguity Endianness and Alignment:** All multi-byte integer fields in the wire header are encoded in **Network Byte Order (Big-Endian)** using standard POSIX conversion primitives (`htons`, `htonl`, `ntohs`, `ntohl`).
-3. **Single-Syscall Frame Emission:** Header and payload bytes are marshaled into a contiguous stack buffer (`16 + 65,536` bytes max) and written in a single `writen()` operation to prevent Nagle's algorithm and TCP Delayed-ACK latency stalls.
-4. **Bounded Memory & Overflow Immunity:** Payloads are strictly bounded to `MAX_PAYLOAD_SIZE` (65,536 bytes). Receivers validate `magic`, `version`, and `payload_len` before reading payload bytes, preventing buffer overflows and unbounded memory allocation attacks.
-5. **Forward Extensibility for Playback Control:** The fixed `param` header field and reserved control opcodes (`PAUSE`, `SEEK`, `STOP`) allow Session 2 real-time pacing and random-access chunk seeking without changing the 16-byte wire header layout.
+### Core Engineering Goals
+1. **Deterministic Framing over Byte-Stream TCP:** TCP (`SOCK_STREAM`) is an unstructured byte stream with no native concept of message boundaries; a single `write()` may be split across multiple TCP segments or coalesced with subsequent writes. PodFlow prefixes every frame with a fixed 16-byte header containing an explicit 32-bit `payload_len` field, enabling receivers to reassemble exact frame boundaries via `readn()`.
+2. **Strict Endianness & Alignment Safety:** Every multi-byte integer field in the wire header is serialized in **Network Byte Order (Big-Endian)** using POSIX primitives (`htons`, `htonl`, `ntohs`, `ntohl`). The C struct `frame_hdr_t` uses `__attribute__((packed))` and `_Static_assert(sizeof(frame_hdr_t) == 16)` to guarantee zero compiler padding across architectures.
+3. **Single-Syscall Atomic Frame Emission:** `send_frame()` marshals the 16-byte header and payload (`<= 65,536` bytes) into a single thread-local stack buffer (`65,552` bytes) and invokes `writen()` once. This prevents splitting header and payload across separate TCP segments, eliminating Nagle's Algorithm + TCP Delayed-ACK latency stalls.
+4. **Drift-Free 50 ms Real-Time Pacing:** Outbound audio chunks are paced against `CLOCK_MONOTONIC` at $\Delta t = 50,000,000\text{ ns}$ (50 ms per 8,820-byte chunk = $176,400\text{ B/s}$) without cumulative sleep drift, while never dropping or skipping audio chunks (preserving bit-exact `md5sum` integrity).
+5. **Decoupled Disk I/O via Bounded Epoch Ring Buffer:** Each active stream pairs a lazy file-reader producer thread with a 40-slot (2.0 s) ring buffer. `PAUSE` applies natural back-pressure so `RESUME` is instantaneous, while `SEEK` uses an atomic generation `epoch` counter to flush stale audio chunks without lock-order inversion.
+6. **Single-Sender Multiplexed Connection Loop:** The per-client connection thread is the sole socket writer and reader, multiplexing incoming client control frames and outbound paced `DATA` frames via `ppoll()`.
+7. **Memory Safety & DoS Resilience:** `recv_frame()` validates `magic`, `version`, `payload_len <= MAX_PAYLOAD_SIZE` (`65,536`), and `payload_len <= buf_cap` before reading payload bytes, returning `-4` without draining untrusted bytes. Filenames are sanitized against path traversal, `SO_SNDTIMEO` (5 s) drops stalled readers, and `--max-clients` (default 1,000) sheds excess load cleanly with `ERROR(SERVER_BUSY=503)`.
 
 ---
 
-## 2. Transport Layer & Connection Model
+## 2. Transport Layer, Socket Configuration & Connection Lifecycle
 
-* **Transport Protocol:** TCP (`SOCK_STREAM`, `AF_INET`).
-* **Default Server Port:** `8888` (configurable via CLI `./server [port]`).
-* **Concurrency Model:** One dedicated POSIX thread (`pthread`) per accepted client connection in Session 1.
-* **Connection Persistence:** A single TCP connection supports multiple sequential request-response transactions (`HELLO` -> `ECHO` -> `LIST` -> `PLAY` -> `END` -> next command). The server keeps the connection open after `END` and non-fatal command errors (`UNKNOWN_CMD`, `FILE_NOT_FOUND`, `INVALID_WAV`, `INVALID_STATE`). The client initiates normal termination by closing the socket after completing its workload.
+* **Transport Protocol:** POSIX stream sockets (`AF_INET`, `SOCK_STREAM`) listening by default on TCP port `8888` (`DEFAULT_PORT`), configurable via `./server [port]`.
+* **Concurrency Architecture:** One detached POSIX thread (`pthread`) per accepted client up to `--max-clients N` (default `1000`). When active clients reach the configured cap, incoming connections immediately receive `ERROR(seq=0, param=503, "SERVER_BUSY")` and are closed.
+* **`TCP_NODELAY = 1` (`IPPROTO_TCP`):** Disables Nagle's algorithm so 16-byte control frames (`ACK`, `END`) and single-buffer `writen()` calls are emitted immediately onto the wire without waiting for delayed ACKs.
+* **`SO_SNDTIMEO = 5` seconds (`SOL_SOCKET`):** Bounds blocking socket writes so a stalled or malicious client that stops draining its TCP receive window is dropped cleanly within 5 seconds.
+* **Persistent Multi-Command Connection:**
+  * A single TCP connection supports sequential operations (`HELLO` -> `ECHO` -> `LIST` -> `PLAY` -> `END` -> next command) without reconnecting.
+  * After `WELCOME`, `ECHO`, `ACK`, `END`, or recoverable command errors (`UNKNOWN_CMD=102`, `FILE_NOT_FOUND=200`, `INVALID_WAV=201`, `SEEK_OUT_OF_RANGE=202`, `INVALID_STATE=300`), the TCP connection **remains open** for the next client command.
+  * After fatal framing violations (`BAD_MAGIC=100`, `BAD_VERSION=101`, `PAYLOAD_TOO_LARGE=103`) or load shedding (`SERVER_BUSY=503`), the server transmits `ERROR` (`0xFF`) and **closes the TCP connection immediately**.
+  * On clean EOF (`recv_frame()` returns `0`) or mid-frame truncation/socket error (`recv_frame()` returns `-1`), the peer closes the socket descriptor immediately without sending a frame.
 
 ---
 
 ## 3. Byte-Order & Serialization Rules
 
-1. **Header Multi-Byte Integers:** All 16-bit (`uint16_t`) and 32-bit (`uint32_t`) fields in `frame_hdr_t` MUST be transmitted in **Big-Endian (Network Byte Order)**—most significant byte first.
-2. **Single-Byte Header Fields:** `version` (`uint8_t`) and `msg_type` (`uint8_t`) occupy 1 byte each at offsets 2 and 3.
-3. **Text Payloads:** String payloads (filenames in `PLAY`, directory listings in `ACK`, banners in `WELCOME`, diagnostic messages in `ERROR`) are encoded as raw **UTF-8 bytes WITHOUT a trailing NUL (`\0`) terminator**. The exact string length is given by `payload_len`.
-4. **Audio Payloads (`DATA` frames):**
-   * `DATA` with `seq_num = 0` carries the raw 44-byte RIFF/WAVE header verbatim from the source file (WAV header fields themselves follow the RIFF specification's native little-endian layout).
-   * `DATA` with `seq_num >= 1` carries raw 16-bit signed little-endian stereo interleaved PCM audio samples (`S16_LE`, 2 channels) verbatim from the source `.wav` file.
+1. **Header Multi-Byte Integers:** All 16-bit (`uint16_t`) and 32-bit (`uint32_t`) header fields (`magic`, `seq_num`, `payload_len`, `param`) MUST be encoded in **Big-Endian (Network Byte Order)** via `htons` / `htonl` on transmit and `ntohs` / `ntohl` on receive.
+2. **Single-Byte Header Fields:** `version` (`uint8_t`) and `msg_type` (`uint8_t`) occupy 1 byte each at offsets `2` and `3`.
+3. **UTF-8 String Payloads:** Text payloads in `HELLO`, `WELCOME` (`"podflow/1"`), `PLAY`, `ACK` (for `LIST`), and `ERROR` are raw **UTF-8 byte sequences without a trailing NUL (`\0`) byte**. Receivers must use `hdr.payload_len` as the exact byte count and append `\0` locally if passing to C string functions.
+4. **Binary Audio Payloads (`DATA`):**
+   * `DATA` with `seq_num = 0` carries the verbatim 44-byte canonical RIFF/WAVE header from the source file (WAV header fields remain in native RIFF little-endian format).
+   * `DATA` with `seq_num >= 1` carries up to `8,820` bytes (`PCM_CHUNK_SIZE`) of raw 16-bit signed little-endian stereo interleaved PCM samples (`S16_LE`) from file offset `44 + (seq_num - 1) * 8820`.
 
 ---
 
 ## 4. Wire Frame Header Format (16 Bytes)
 
-Every frame transmitted by either client or server begins with a 16-byte header followed immediately by `payload_len` bytes of payload (`0 <= payload_len <= 65536`).
+Every frame transmitted by client or server begins with a packed 16-byte header (`sizeof(frame_hdr_t) == 16`) followed immediately by `payload_len` bytes of payload (`0 <= payload_len <= 65,536`).
 
 ### 4.1 RFC-Style 32-Bit Row Diagram
 
@@ -66,228 +73,259 @@ Every frame transmitted by either client or server begins with a 16-byte header 
 
 ### 4.2 Header Field Specification Table
 
-| Byte Offset | Size (Bytes) | C Type | Field Name | Wire Byte Order | Description & Constraints |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `0` | `2` | `uint16_t` | `magic` | Big-Endian | Protocol identifier magic number. Must equal `0x5753` (ASCII `'W'` `0x57`, `'S'` `0x53`). |
-| `2` | `1` | `uint8_t` | `version` | N/A (1 byte) | Protocol version number. Must equal `1` (`PROTO_VERSION`). |
-| `3` | `1` | `uint8_t` | `msg_type` | N/A (1 byte) | Frame opcode defined in `proto_msg_t` (`0x01`..`0x0B`, `0xFF`). |
-| `4` | `4` | `uint32_t` | `seq_num` | Big-Endian | Monotonic sequence number or request correlation ID. |
-| `8` | `4` | `uint32_t` | `payload_len` | Big-Endian | Number of payload bytes immediately following byte 15. Valid range: `0` to `65536` (`MAX_PAYLOAD_SIZE`). |
-| `12` | `4` | `uint32_t` | `param` | Big-Endian | Context-dependent 32-bit parameter (e.g., chunk size in `WELCOME`, total bytes in `END`, error code in `ERROR`). |
+| Offset (Bytes) | Size (Bytes) | C11 Type | Field Name | Wire Endianness | Valid Range / Value | Description & Constraints |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `0` | `2` | `uint16_t` | `magic` | Big-Endian | `0x5753` (`"WS"`) | Protocol identifier `0x5753` (ASCII `"WS"`). Mismatch triggers `BAD_MAGIC` (`100`). |
+| `2` | `1` | `uint8_t` | `version` | Single Byte | `1` (`PROTO_VERSION`) | Protocol version `1`. Mismatch triggers `BAD_VERSION` (`101`). |
+| `3` | `1` | `uint8_t` | `msg_type` | Single Byte | `0x01`..`0x0B`, `0xFF` | Frame opcode from `proto_msg_t`. |
+| `4` | `4` | `uint32_t` | `seq_num` | Big-Endian | `0` .. `2^32 - 1` | Sequence number (`0` for WAV header, `1..N` for PCM chunks, `N+1` for `END`, or request ID). |
+| `8` | `4` | `uint32_t` | `payload_len` | Big-Endian | `0` .. `65,536` | Payload byte length immediately following byte `15`. Values `> 65,536` trigger `PAYLOAD_TOO_LARGE` (`103`). |
+| `12` | `4` | `uint32_t` | `param` | Big-Endian | `0` .. `2^32 - 1` | Context parameter (chunk size, start chunk, target seek chunk, ACK chunk seq, total bytes sent, or error code). |
 
 ---
 
 ## 5. Message Types Specification
 
-| Opcode (Hex) | Name | Direction | `seq_num` Meaning | `param` Meaning | Payload Content (`payload_len` bytes) | Expected Peer Response |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `0x01` | `HELLO` | Client -> Server | `0` | `0` (unused) | Optional UTF-8 client identifier string (e.g., `"cli-1"`), or empty (`0` bytes). | `WELCOME` (`0x02`) |
-| `0x02` | `WELCOME` | Server -> Client | `0` | `8820` (`PCM_CHUNK_SIZE`) | Server banner string `"wav-streamer/1"` (14 bytes, no NUL). | None (handshake complete) |
-| `0x03` | `LIST` | Client -> Server | Client-chosen (e.g., `0`) | `0` | Empty (`payload_len = 0`). | `ACK` (`0x0A`) containing newline-separated `.wav` filenames in `./media`. |
-| `0x04` | `PLAY` | Client -> Server | `0` | Session 1: `0`. Session 2: start chunk index (`0` = start). | Target `.wav` filename inside `./media` (UTF-8, no path traversal, no NUL). | Stream of `DATA` (`0x08`) frames (`seq=0..N`) followed by `END` (`0x09`) (`seq=N+1`), or `ERROR` (`200`/`201`). |
-| `0x05` | `PAUSE` | Client -> Server | Client-chosen | `0` | Empty (`payload_len = 0`). | Session 1: `ERROR` `INVALID_STATE` (`300`). Session 2: `ACK` (`0x0A`). |
-| `0x06` | `SEEK` | Client -> Server | Client-chosen | Target chunk number (`>= 1`). | Empty (`payload_len = 0`). | Session 1: `ERROR` `INVALID_STATE` (`300`). Session 2: `DATA` stream from target chunk or `ERROR` (`202`). |
-| `0x07` | `STOP` | Client -> Server | Client-chosen | `0` | Empty (`payload_len = 0`). | Session 1: `ERROR` `INVALID_STATE` (`300`). Session 2: `END` (`0x09`) or `ACK` (`0x0A`). |
-| `0x08` | `DATA` | Server -> Client | `0` = WAV header; `1..N` = PCM chunk index. | `0` | `seq=0`: 44-byte WAV header. `seq=1..N`: `<= 8820` bytes of raw PCM audio. | None (unidirectional stream until `END`). |
-| `0x09` | `END` | Server -> Client | `N + 1` (where `N` is last `DATA` seq) | Total payload bytes sent across `seq=0..N` (including 44-byte WAV header). | Empty (`payload_len = 0`). | None (connection stays open for next command). |
-| `0x0A` | `ACK` | Server -> Client | Matches request `seq_num` | Context-dependent (`0` for `LIST`). | For `LIST`: newline-separated `*.wav` filenames in `./media`. | None. |
-| `0x0B` | `ECHO` | Bidirectional | Arbitrary `i` (`uint32_t`) | Arbitrary `p` (`uint32_t`) | Arbitrary test bytes (`0..65536` bytes). | Server replies with `ECHO` (`0x0B`) preserving identical `seq_num`, `param`, and payload. |
-| `0xFF` | `ERROR` | Server -> Client | Offending request `seq_num` (or `0`) | `proto_err_t` error code (`100`..`500`). | Human-readable UTF-8 diagnostic message (no NUL). | Connection closed on `100`, `101`, `103`; kept open on `102`, `200`, `201`, `202`, `300`, `500`. |
-
----
-
-## 6. Error Codes Specification
-
-When an error occurs, the server transmits an `ERROR` (`0xFF`) frame with `hdr.param` set to the numeric `proto_err_t` value and the payload containing a UTF-8 description.
-
-| Code (Dec) | Symbolic Name | Category | Meaning | Trigger Condition | Connection Disposition |
+| Opcode | Name | Dir. | `param` Meaning | Payload (`payload_len` B) | Expected Peer Response |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `0` | `NONE` | Nominal | No error | Internal success status | Kept Open |
-| `100` | `BAD_MAGIC` | Framing / Protocol | Header `magic != 0x5753` | `recv_frame()` returns `-2` | **Closed Immediately** after sending `ERROR` |
-| `101` | `BAD_VERSION` | Framing / Protocol | Header `version != 1` | `recv_frame()` returns `-3` | **Closed Immediately** after sending `ERROR` |
-| `102` | `UNKNOWN_CMD` | Command / Protocol | Unrecognized `msg_type` opcode | Server switch default branch | **Kept Open** for subsequent commands |
-| `103` | `PAYLOAD_TOO_LARGE` | Framing / Protocol | `payload_len > 65536` (or exceeds receiver cap) | `recv_frame()` returns `-4` | **Closed Immediately** after sending `ERROR` (payload not drained) |
-| `200` | `FILE_NOT_FOUND` | Media / Resource | Requested `.wav` file does not exist in `./media` | `open()` fails with `ENOENT` or path rejected | **Kept Open** for subsequent commands |
-| `201` | `INVALID_WAV` | Media / Format | File is smaller than 44 bytes or lacks valid RIFF/WAVE PCM header | WAV header validation fails on `PLAY` | **Kept Open** for subsequent commands |
-| `202` | `SEEK_OUT_OF_RANGE` | Playback Control | Target seek chunk exceeds total chunks in file or is `0` | `SEEK` validation in Session 2 | **Kept Open** |
-| `300` | `INVALID_STATE` | State Machine | Command not valid in current session/state | `PAUSE`, `SEEK`, or `STOP` sent in Session 1 | **Kept Open** for subsequent commands |
-| `500` | `INTERNAL_SERVER` | Server Internal | Unexpected system error (`read` failure, `malloc` failure) | Disk I/O or OS error on server | **Kept Open** (or closed if stream already started) |
+| `0x01` (`1`) | `HELLO` | C -> S | `0` | Optional UTF-8 client name (`0..N` B) | `WELCOME` (`0x02`) |
+| `0x02` (`2`) | `WELCOME` | S -> C | `8820` (`PCM_CHUNK_SIZE`) | `"podflow/1"` (`9` B; accept any banner) | None (handshake complete) |
+| `0x03` (`3`) | `LIST` | C -> S | `0` | Empty (`0` B) | `ACK` (`0x0A`) with newline-separated `*.wav` names |
+| `0x04` (`4`) | `PLAY` (Start) | C -> S | `start_chunk` (`0` or `1` = start; `1..total`) | Target `.wav` filename (`> 0` B, no NUL) | `ACK(eff_start)`, immediate `DATA(seq=0, 44B)`, paced `DATA(seq=n)`, then `END(total+1)` |
+| `0x04` (`4`) | `PLAY` (Resume) | C -> S | `0` | Empty (`0` B, valid only in `PAUSED`) | `ACK(param=next_chunk_seq)`, then paced `DATA` resumes |
+| `0x05` (`5`) | `PAUSE` | C -> S | `0` | Empty (`0` B, valid only in `PLAYING`) | `ACK(param=next_chunk_seq_to_send)`; sending stops |
+| `0x06` (`6`) | `SEEK` | C -> S | `target_chunk` (`1..total_chunks`) | Empty (`0` B, valid in `PLAYING` / `PAUSED`) | Ring flushed, `ACK(target_chunk)`; `DATA` continues from `target_chunk` (WAV header NOT resent) |
+| `0x07` (`7`) | `STOP` | C -> S | `0` | Empty (`0` B, valid in `PLAYING` / `PAUSED`) | Ring flushed, `ACK(last_sent_seq)`, state -> `IDLE`, **no `END` frame** |
+| `0x08` (`8`) | `DATA` | S -> C | `0` | `seq=0`: 44 B WAV hdr; `seq>=1`: `<= 8,820` B PCM | None (unidirectional stream) |
+| `0x09` (`9`) | `END` | S -> C | Total payload bytes sent in stream (incl. 44 B hdr) | Empty (`0` B), `seq = total_chunks + 1` | None; server state returns to `IDLE` |
+| `0x0A` (`10`) | `ACK` | S -> C | Confirmed chunk seq (`PLAY`/`PAUSE`/`SEEK`/`STOP`) or `0` | Empty (`0` B) for controls; file list for `LIST` | None |
+| `0x0B` (`11`) | `ECHO` | C <-> S | Arbitrary `uint32_t` echoed verbatim | Arbitrary test bytes (`0..65,536` B) | `ECHO` (`0x0B`) with identical `seq_num`, `param`, and payload |
+| `0xFF` (`255`) | `ERROR` | S -> C | `proto_err_t` code (`100`..`503`) | UTF-8 diagnostic message (no NUL) | Connection kept or closed per Section 6 |
 
 ---
 
-## 7. Protocol Sequence Diagrams
+## 6. Error Codes & Client Reaction Specification
 
-### 7.1 Handshake (`HELLO` / `WELCOME`)
+An `ERROR` (`0xFF`) frame always carries the numeric `proto_err_t` code in `hdr.param` and a UTF-8 diagnostic string in the payload.
 
-```text
-Client                                                       Server
-  |                                                            |
-  |--- [TCP SYN / SYN-ACK / ACK (Port 8888)] ----------------->|
-  |                                                            |
-  |--- HELLO (type=0x01, seq=0, param=0, len=5, "cli-1") ----->|
-  |                                                            |
-  |<-- WELCOME (type=0x02, seq=0, param=8820,                  |
-  |             len=14, "wav-streamer/1") ---------------------|
-  |                                                            |
-```
-
-### 7.2 Echo Verification Loop (`ECHO`)
-
-```text
-Client                                                       Server
-  |                                                            |
-  |--- ECHO (type=0x0B, seq=1, param=42, len=128, <bytes>) --->|
-  |<-- ECHO (type=0x0B, seq=1, param=42, len=128, <bytes>) ----|
-  |                                                            |
-  |--- ECHO (type=0x0B, seq=2, param=99, len=8820, <bytes>) -->|
-  |<-- ECHO (type=0x0B, seq=2, param=99, len=8820, <bytes>) ---|
-  |                                                            |
-```
-
-### 7.3 Successful Audio Stream (`PLAY` -> `DATA`... -> `END`)
-
-Example shown for `sample_30s.wav` ($5,292,044$ bytes total: $44$-byte WAV header + $600 \times 8,820$-byte PCM chunks):
-
-```text
-Client                                                       Server
-  |                                                            |
-  |--- PLAY (type=0x04, seq=0, param=0,                        |
-  |          len=14, "sample_30s.wav") ----------------------->|
-  |                                                            | [Opens ./media/sample_30s.wav]
-  |<-- DATA (type=0x08, seq=0,   param=0, len=44, <WAV hdr>) --| [Validates 44-byte RIFF header]
-  |<-- DATA (type=0x08, seq=1,   param=0, len=8820, <PCM>) ----|
-  |<-- DATA (type=0x08, seq=2,   param=0, len=8820, <PCM>) ----|
-  |    ...                                                     |
-  |<-- DATA (type=0x08, seq=600, param=0, len=8820, <PCM>) ----|
-  |<-- END  (type=0x09, seq=601, param=5292044, len=0) --------|
-  |                                                            | [Connection remains OPEN]
-```
-
-### 7.4 Failed Play Request (`FILE_NOT_FOUND`)
-
-```text
-Client                                                       Server
-  |                                                            |
-  |--- PLAY (type=0x04, seq=0, param=0,                        |
-  |          len=11, "missing.wav") -------------------------->|
-  |                                                            | [open("./media/missing.wav") -> ENOENT]
-  |<-- ERROR (type=0xFF, seq=0, param=200,                     |
-  |           len=14, "File not found") -----------------------|
-  |                                                            | [Connection remains OPEN]
-```
-
-### 7.5 Fatal Protocol Violation (`BAD_MAGIC` / `PAYLOAD_TOO_LARGE`)
-
-```text
-Client                                                       Server
-  |                                                            |
-  |--- [Malformed Frame: magic=0xDEAD, seq=7, len=100] ------->|
-  |                                                            | [recv_frame() -> -2 (RECV_ERR_BAD_MAGIC)]
-  |<-- ERROR (type=0xFF, seq=7, param=100,                     |
-  |           len=9, "BAD_MAGIC") -----------------------------|
-  |<-- [TCP FIN / Close Connection Immediately] ---------------|
-  |                                                            |
-```
+| Code | Name | Trigger Condition | Server Connection Disposition | Mandatory Client Reaction (`client.c`) |
+| :--- | :--- | :--- | :--- | :--- |
+| `0` | `NONE` | Internal nominal status (never sent in an `ERROR` frame). | **Kept Open** | Continue normal execution; exit `0` when workload completes. |
+| `100` | `BAD_MAGIC` | Incoming header `magic != 0x5753` (`recv_frame` returns `-2`). | **Closed Immediately** | Log fatal framing error (`stderr`), close local socket immediately, do not retry on same connection, exit non-zero (`1`). |
+| `101` | `BAD_VERSION` | Incoming header `version != 1` (`recv_frame` returns `-3`). | **Closed Immediately** | Log version mismatch (`stderr`), close socket immediately, abort with non-zero exit (`1`). |
+| `102` | `UNKNOWN_CMD` | Unrecognized `msg_type` opcode received by server dispatcher. | **Kept Open** (state unchanged) | Log warning with server diagnostic message; connection remains synchronized for subsequent commands. |
+| `103` | `PAYLOAD_TOO_LARGE` | Incoming `payload_len > 65536` (`recv_frame` returns `-4` without draining). | **Closed Immediately** | Log fatal oversize payload error (`stderr`), close socket immediately, exit non-zero (`1`). |
+| `200` | `FILE_NOT_FOUND` | `PLAY` filename is empty, contains `/` or `..`, or is missing in `./media`. | **Kept Open** (`IDLE`) | Log file-not-found error; close and `unlink()` any partial output file so no 0-byte file remains. Connection stays usable; exit non-zero (`2`) in CLI mode. |
+| `201` | `INVALID_WAV` | Target file is `<= 44` bytes or lacks canonical 16-bit 44.1 kHz stereo PCM header. | **Kept Open** (`IDLE`) | Log invalid media format error, remove any partial output file (`unlink`), keep connection open (or exit `2` in CLI mode). |
+| `202` | `SEEK_OUT_OF_RANGE` | `PLAY start_chunk > total_chunks` or `SEEK` target not in `1..total_chunks`. | **Kept Open** (state unchanged) | Log seek range warning; retain existing playback state/buffer and clamp seek requests to `[1 .. total_chunks]`. |
+| `300` | `INVALID_STATE` | Command invalid in current state (`PAUSE` outside `PLAYING`, `SEEK`/`STOP` in `IDLE`, `PLAY(file)` outside `IDLE`, resume outside `PAUSED`). | **Kept Open** (state unchanged) | Log state error message; connection remains open and synchronized for valid commands. |
+| `500` | `INTERNAL_SERVER` | Unexpected OS, disk `fseeko`, or thread allocation error on server. | **Kept Open** (or closed on I/O fault) | Log server fault, discard incomplete output file, close or reconnect with backoff, exit non-zero (`3`). |
+| `503` | `SERVER_BUSY` | Active client count reached `--max-clients` limit upon connection accept. | **Closed Immediately** | Log server-busy error, close socket immediately, optionally retry with exponential backoff. |
 
 ---
 
-## 8. Audio Chunk-Size Derivation & WAV Header Handling
+## 7. Per-Connection State Machine
 
-### 8.1 Mathematical Derivation of `PCM_CHUNK_SIZE = 8820`
-All reference audio files in PodFlow use standard CD-quality uncompressed PCM parameters:
-* **Sample Rate ($f_s$):** $44,100\text{ Hz}$ (samples per second per channel)
-* **Channels ($C$):** $2$ (Stereo: Left + Right)
-* **Bit Depth ($b$):** $16\text{ bits/sample} = 2\text{ bytes/sample}$
-* **BlockAlign ($B_{\text{align}}$):** $C \times (b / 8) = 2 \times 2 = 4\text{ bytes per stereo sample frame}$
-* **ByteRate ($R_{\text{byte}}$):** $f_s \times B_{\text{align}} = 44,100 \times 4 = 176,400\text{ bytes/second}$
-
-For a target chunk duration of $\Delta t = 50\text{ ms} = 0.05\text{ seconds}$ (20 chunks per second):
-$$\text{PCM\_CHUNK\_SIZE} = R_{\text{byte}} \times \Delta t = 176,400\text{ B/s} \times 0.05\text{ s} = 8,820\text{ bytes}$$
-
-**Frame Alignment Verification:**
-$$\frac{8,820\text{ bytes}}{4\text{ bytes/stereo frame}} = 2,205\text{ stereo sample frames (exact integer)}$$
-Because $8,820$ is evenly divisible by $\text{BlockAlign} = 4$, no stereo sample frame is ever split across two `DATA` frames.
-
-### 8.2 Reference Test Files & Partial Tail Chunks
-* **`sample_30s.wav` ($30.00\text{ s}$):** $44 + (600 \times 8,820) = 5,292,044\text{ bytes}$. Sent as `DATA(seq=0, len=44)`, `DATA(seq=1..600, len=8820)`, `END(seq=601, param=5292044)`.
-* **`sample_5m.wav` ($300.00\text{ s}$):** $44 + (6000 \times 8,820) = 52,920,044\text{ bytes}$. Sent as `DATA(seq=0, len=44)`, `DATA(seq=1..6000, len=8820)`, `END(seq=6001, param=52920044)`.
-* **`sample_tail.wav` ($2.37\text{ s}$):** $2.37\text{ s} \times 176,400\text{ B/s} = 418,068\text{ bytes of PCM} = (47 \times 8,820) + 3,528\text{ bytes}$. Total file size $= 44 + 418,068 = 418,112\text{ bytes}$. Sent as `DATA(seq=0, len=44)`, `DATA(seq=1..47, len=8820)`, `DATA(seq=48, len=3528)`, `END(seq=49, param=418112)`.
-
-### 8.3 Canonical 44-Byte WAV Header Handling (`seq = 0`)
-Upon receiving `PLAY`, the server reads the first 44 bytes of the target `.wav` file, verifies `"RIFF"` at offset 0, `"WAVE"` at offset 8, AudioFormat `1` (PCM), NumChannels `2`, SampleRate `44100`, and BitsPerSample `16`, and transmits those 44 bytes unaltered in `DATA` with `seq_num = 0`. A client saving the stream (`./client get`) simply writes the payload of `DATA(seq=0)` followed by `DATA(seq=1..N)` sequentially to the output file to produce a bit-identical copy (`md5sum` match) of the server's `.wav` file.
-
----
-
-## 9. Protocol Limits & Versioning Policy
-
-### 9.1 Hard Protocol Limits
-* `FRAME_HEADER_SIZE`: `16` bytes.
-* `MAX_PAYLOAD_SIZE`: `65,536` bytes ($64\text{ KiB}$). Any frame header declaring `payload_len > 65536` is immediately rejected by `recv_frame()` with `RECV_ERR_PAYLOAD_LEN` (`-4`).
-* Maximum Wire Frame Size: $16 + 65,536 = 65,552\text{ bytes}$.
-
-### 9.2 Versioning Policy
-* Version `1` (`PROTO_VERSION = 1`) is the sole version defined for Sessions 1 and 2.
-* Backward-compatible extensions within Version `1` must use previously reserved opcodes (`PAUSE=0x05`, `SEEK=0x06`, `STOP=0x07`) or reserved `param` values (`PLAY` start chunk).
-* Any change to the 16-byte header size, field offsets, endianness, or magic number requires incrementing `PROTO_VERSION` to `2`. Peers receiving a version other than `1` MUST return `RECV_ERR_BAD_VERSION` (`-3`), emit `ERROR(BAD_VERSION=101)`, and close the connection.
-
----
-
-## 10. Worked Hex Dumps
-
-### 10.1 Worked Example 1: `HELLO` Frame (21 Bytes Total)
-**Scenario:** Client sends `HELLO` (`msg_type = 0x01`), `seq_num = 0`, `param = 0`, payload = `"cli-1"` (5 ASCII bytes: `0x63 0x6C 0x69 0x2D 0x31`).
+Each client connection maintains an independent state machine initialized to `IDLE` upon TCP connection establishment.
 
 ```text
-Byte Offset   Hex Bytes                  Field Breakdown
------------   -----------------------    ----------------------------------------------
-0000 .. 0001  57 53                      magic       = 0x5753 ("WS", Big-Endian)
-0002          01                         version     = 0x01 (1)
-0003          01                         msg_type    = 0x01 (HELLO)
-0004 .. 0007  00 00 00 00                seq_num     = 0x00000000 (0, Big-Endian)
-0008 .. 000B  00 00 00 05                payload_len = 0x00000005 (5 bytes, Big-Endian)
-000C .. 000F  00 00 00 00                param       = 0x00000000 (0, Big-Endian)
-0010 .. 0014  63 6C 69 2D 31             payload     = "cli-1" (5 bytes, no NUL)
+                       +-----------------------------------+
+                       |               IDLE                |
+                       +-----------------------------------+
+                         |                               ^
+   PLAY(file, start)     |                               | 1. STOP -> ACK(last_sent_seq)
+   -> ACK(eff_start)     |                               | 2. Stream EOF -> END(total_chunks+1,
+   -> DATA(seq=0, 44B)   |                               |                    param=total_bytes_sent)
+                         v                               |
+                       +-----------------------------------+
+        +------------->|              PLAYING              |<-------------+
+        |              +-----------------------------------+              |
+        |                |                               ^                |
+  SEEK(target)           | PAUSE                         | PLAY("")       | SEEK(target)
+  -> rb_flush, fseeko    | -> ACK(next_seq)              | (resume)       | -> rb_flush, fseeko
+  -> ACK(target)         v                               | -> ACK(next)   | -> ACK(target)
+        |              +-------------------+             |                |
+        +--------------|      PAUSED       |-------------+----------------+
+                       +-------------------+
+                         |               |
+                         +-------+-------+
+                                 |
+                                 | STOP -> ACK(last_sent_seq) [No END]
+                                 v
+                         [ Returns to IDLE ]
 ```
 
-### 10.2 Worked Example 2: `DATA` Frame Header for `seq = 1`, `payload_len = 8820` (16-Byte Header)
-**Scenario:** Server sends the first PCM chunk: `msg_type = 0x08` (`DATA`), `seq_num = 1`, `payload_len = 8820` (`8820` in decimal $= 0\text{x}00002274$ in hexadecimal), `param = 0`.
+### 7.1 State × Command Transition Matrix
 
-```text
-Byte Offset   Hex Bytes                  Field Breakdown
------------   -----------------------    ----------------------------------------------
-0000 .. 0001  57 53                      magic       = 0x5753 ("WS", Big-Endian)
-0002          01                         version     = 0x01 (1)
-0003          08                         msg_type    = 0x08 (DATA)
-0004 .. 0007  00 00 00 01                seq_num     = 0x00000001 (1, Big-Endian)
-0008 .. 000B  00 00 22 74                payload_len = 0x00002274 (8820 bytes, Big-Endian)
-000C .. 000F  00 00 00 00                param       = 0x00000000 (0, Big-Endian)
-[Followed immediately by 8,820 bytes of raw stereo PCM audio at offsets 0010 .. 2283]
-```
-
----
-
-## 11. Planned for v1 Session 2 (Reserved Contract)
-
-In Session 1, the server operates in unpaced burst mode and rejects `PAUSE`, `SEEK`, and `STOP` with `ERROR(INVALID_STATE=300)`. The wire format already reserves full support for Session 2 features without header modifications:
-
-1. **Real-Time 50 ms Server Pacing (`clock_nanosleep`):**
-   * In Session 2, the server paces `DATA` chunks using `clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, ...)` at one chunk ($8,820\text{ bytes}$) every $50\text{ ms}$ ($20\text{ chunks/s}$) to match the real-time consumption rate of $176,400\text{ B/s}$ without cumulative timer drift.
-2. **`PLAY` with Non-Zero Start Chunk (`param = start_chunk`):**
-   * `param = 0` starts from the beginning (sending `seq = 0` WAV header followed by `seq = 1`).
-   * `param = K` ($K \ge 1$) begins streaming directly from chunk $K$.
-3. **`SEEK` (`0x06`):**
-   * Client sends `SEEK` with `payload_len = 0` and `param = target_chunk` ($K \ge 1$).
-   * Server computes the exact byte offset in the `.wav` file using:
-     $$\text{file\_offset} = 44 + (\text{target\_chunk} - 1) \times 8,820$$
-   * If `file_offset >= file_size` or `target_chunk == 0`, server replies `ERROR(SEEK_OUT_OF_RANGE=202)`. Otherwise, server calls `lseek(wav_fd, file_offset, SEEK_SET)` and resumes sending `DATA` frames with `seq_num = target_chunk`.
-4. **`PAUSE` (`0x05`) and `STOP` (`0x07`):**
-   * Sent by client with `payload_len = 0` and `param = 0` during an active stream.
-   * `PAUSE` suspends chunk transmission until resumed; `STOP` aborts the current stream, sends `END` with total bytes transmitted so far, and returns the session to the idle command state.
-
----
-
-## 12. Change Log
-
-| Version | Date | Author | Summary of Changes |
+| Command \ State | `IDLE` | `PLAYING` | `PAUSED` |
 | :--- | :--- | :--- | :--- |
-| `v1.0` | Session 1 (Week 1) | Member 2 | Initial frozen protocol specification: 16-byte big-endian frame header, `0x01`–`0x0B` and `0xFF` opcodes, `0`–`500` error taxonomy, 8,820-byte chunk derivation, hex dumps, and Session 2 reservations. |
+| **`HELLO`** | `WELCOME(8820, "podflow/1")` -> `IDLE` | `WELCOME` -> `PLAYING` | `WELCOME` -> `PAUSED` |
+| **`ECHO`** | `ECHO` (mirror `seq`, `param`, `data`) -> `IDLE` | `ECHO` -> `PLAYING` | `ECHO` -> `PAUSED` |
+| **`LIST`** | `ACK(filenames)` -> `IDLE` | `ACK(filenames)` -> `PLAYING` | `ACK(filenames)` -> `PAUSED` |
+| **`PLAY(filename, start)`** | Valid: `ACK(eff_start)`, `DATA(0)` -> `PLAYING`<br>Bad file: `ERROR(200/201)` -> `IDLE`<br>Range: `ERROR(202)` -> `IDLE` | `ERROR(300 INVALID_STATE)` -> `PLAYING` | `ERROR(300 INVALID_STATE)` -> `PAUSED` |
+| **`PLAY("", 0)` (Resume)** | `ERROR(300 INVALID_STATE)` -> `IDLE` | `ERROR(300 INVALID_STATE)` -> `PLAYING` | `ACK(next_seq)`, `pacer_reset` -> `PLAYING` |
+| **`PAUSE`** | `ERROR(300 INVALID_STATE)` -> `IDLE` | `ACK(next_seq)` -> `PAUSED` | `ERROR(300 INVALID_STATE)` -> `PAUSED` |
+| **`SEEK(target)`** | `ERROR(300 INVALID_STATE)` -> `IDLE` | `1..total`: flush, `ACK(target)`, `pacer_reset` -> `PLAYING`<br>Out of range: `ERROR(202)` -> `PLAYING` | `1..total`: flush, `ACK(target)` -> `PAUSED`<br>Out of range: `ERROR(202)` -> `PAUSED` |
+| **`STOP`** | `ERROR(300 INVALID_STATE)` -> `IDLE` | Flush, close file, `ACK(last_sent_seq)` -> `IDLE` | Flush, close file, `ACK(last_sent_seq)` -> `IDLE` |
+
+---
+
+## 8. Protocol Sequence Diagrams
+
+### 8.1 Handshake (`HELLO` / `WELCOME`) and `ECHO`
+
+```text
+Client                                                       Server
+  |--- HELLO (type=1, seq=0, param=0, len=6, "client") ------->|
+  |<-- WELCOME (type=2, seq=0, param=8820, len=9, "podflow/1")-|
+  |--- ECHO (type=11, seq=1, param=123, len=32, <bytes>) ----->|
+  |<-- ECHO (type=11, seq=1, param=123, len=32, <bytes>) ------|
+```
+
+### 8.2 Full Paced Stream (`PLAY` -> `DATA` ... -> `END`)
+
+Illustrated for `sample_30s.wav` ($5,292,044\text{ bytes} = 44\text{-byte header} + 600 \times 8,820\text{-byte PCM chunks}$):
+
+```text
+Client                                                       Server (State: IDLE)
+  |--- PLAY (type=4, seq=1, param=0, "sample_30s.wav") ------->|
+  |<-- ACK  (type=10, seq=1, param=1, len=0) ------------------| [State -> PLAYING, pacer_reset()]
+  |<-- DATA (type=8, seq=0, param=0, len=44, <WAV Header>) ----| [Immediate (t = 0 ms)]
+  |<-- DATA (type=8, seq=1, param=0, len=8820, <PCM #1>) ------| [Immediate first chunk (t = 0 ms)]
+  |    ... (50 ms CLOCK_MONOTONIC interval) ...                |
+  |<-- DATA (type=8, seq=2, param=0, len=8820, <PCM #2>) ------| [t = 50 ms]
+  |<-- DATA (type=8, seq=600, param=0, len=8820, <PCM #600>) --| [t = 29,950 ms]
+  |<-- END  (type=9, seq=601, param=5292044, len=0) -----------| [State -> IDLE]
+```
+
+### 8.3 Interactive `PAUSE` and `RESUME`
+
+```text
+Client                                                       Server (State: PLAYING)
+  |<-- DATA  (type=8, seq=20, param=0, len=8820) --------------|
+  |--- PAUSE (type=5, seq=2, param=0, len=0) ----------------->|
+  |<-- ACK   (type=10, seq=2, param=21, len=0) ----------------| [State -> PAUSED; ring keeps filling]
+  |    ... (Paused; no DATA frames transmitted) ...            |
+  |--- PLAY  (type=4, seq=3, param=0, len=0) ----------------->| [Empty payload = RESUME]
+  |<-- ACK   (type=10, seq=3, param=21, len=0) ----------------| [State -> PLAYING, pacer_reset()]
+  |<-- DATA  (type=8, seq=21, param=0, len=8820) --------------| [Immediate first chunk after resume]
+```
+
+### 8.4 `SEEK` During Active Playback (With Stale-`DATA` Filter Rule)
+
+```text
+Client                                                       Server (State: PLAYING)
+  |<-- DATA (type=8, seq=10, param=0, len=8820) ---------------|
+  |--- SEEK (type=6, seq=4, param=100, len=0) ---------------->|
+  |<-- DATA (type=8, seq=11, param=0, len=8820) [IN-FLIGHT] ---| [Client ignores: arrives before ACK]
+  |                                                            | [fseeko(chunk 100), rb_flush()]
+  |<-- ACK  (type=10, seq=4, param=100, len=0) ----------------| [pacer_reset()]
+  |<-- DATA (type=8, seq=100, param=0, len=8820) --------------| [Client accepts: WAV hdr NOT resent]
+```
+
+### 8.5 `STOP`, Wrong-State Error (`300`), and `SERVER_BUSY` (`503`)
+
+```text
+Client                                                       Server (State: PLAYING)
+  |--- STOP  (type=7, seq=5, param=0, len=0) ----------------->|
+  |<-- ACK   (type=10, seq=5, param=35, len=0) ----------------| [State -> IDLE; NO END frame sent]
+  |--- PAUSE (type=5, seq=6, param=0, len=0) ----------------->| [Invalid in IDLE]
+  |<-- ERROR (type=0xFF, seq=6, param=300, "INVALID_STATE") ---| [Connection KEPT OPEN]
+
+Client #1001 (--max-clients 1000 reached)                    Server
+  |--- [TCP Connect] ----------------------------------------->|
+  |<-- ERROR (type=0xFF, seq=0, param=503, "SERVER_BUSY") -----| [Closed immediately]
+```
+
+### 8.6 `PLAY` Error (`FILE_NOT_FOUND = 200`) & Fatal Violation (`BAD_MAGIC = 100`)
+
+```text
+Client                                                       Server (State: IDLE)
+  |--- PLAY (type=4, seq=1, param=0, len=11, "missing.wav") -->|
+  |<-- ERROR (type=0xFF, seq=1, param=200, "FILE_NOT_FOUND") --| [Connection KEPT OPEN]
+
+Client                                                       Server
+  |--- [Frame with magic=0xDEAD, ver=1, seq=4, len=32] ------->| [recv_frame() -> -2]
+  |<-- ERROR (type=0xFF, seq=4, param=100, "BAD_MAGIC") -------|
+  |<-- [Server closes socket immediately (TCP FIN)] -----------|
+```
+
+---
+
+## 9. Audio Chunk Math, Seek Formula, Pacing and Stale-DATA Rules
+
+### 9.1 Exact Derivation of `PCM_CHUNK_SIZE = 8820`
+Canonical PodFlow audio uses 16-bit (2 B), 44,100 Hz, 2-channel stereo PCM:
+* **BlockAlign ($B_{\text{align}}$):** $2\text{ channels} \times 2\text{ bytes} = 4\text{ bytes per stereo sample frame}$.
+* **ByteRate ($R_{\text{byte}}$):** $44,100\text{ Hz} \times 4\text{ bytes} = 176,400\text{ bytes/second}$.
+* **`PCM_CHUNK_SIZE` (50 ms):** $176,400\text{ B/s} \times 0.05\text{ s} = 8,820\text{ bytes}$ ($2,205$ stereo sample frames; $8,820 \bmod 4 = 0$, preventing channel tearing).
+* **Total Chunks (file size $F > 44$):**
+  $$\text{total\_chunks} = \left\lceil \frac{F - 44}{8820} \right\rceil = \frac{(F - 44) + 8819}{8820}$$
+
+### 9.2 Reference Media Test Suite Sizes
+1. **`sample_30s.wav` ($30.00\text{ s}$):** $44 + (600 \times 8,820) = 5,292,044\text{ bytes}$ (`END.seq_num = 601`, `END.param = 5292044`).
+2. **`sample_5m.wav` ($300.00\text{ s}$):** $44 + (6,000 \times 8,820) = 52,920,044\text{ bytes}$ (`END.seq_num = 6001`, `END.param = 52920044`).
+3. **`sample_tail.wav` ($2.37\text{ s}$ — Partial Tail Chunk):** $44 + (47 \times 8,820) + 3,528 = 418,112\text{ bytes}$ (`47` full chunks + `1` partial tail chunk of $3,528\text{ B}$; `END.seq_num = 49`, `END.param = 418112`).
+
+### 9.3 Seek Offset Formula and Worked Examples
+**File Byte Offset for 1-Based Chunk $n$ ($1 \le n \le \text{total\_chunks}$):**
+$$\text{offset}(n) = 44 + (n - 1) \times 8820$$
+
+* **Chunk $n = 1$ (Start of PCM):** $\text{offset}(1) = 44 + (1 - 1) \times 8820 = 44\text{ bytes}$.
+* **Chunk $n = 100$ (5.0-second mark in `sample_30s.wav`):** $\text{offset}(100) = 44 + 99 \times 8820 = 873,224\text{ bytes}$.
+* **Chunk $n = 600$ (Final chunk of `sample_30s.wav`, $F = 5,292,044$):** $\text{offset}(600) = 44 + 599 \times 8820 = 5,283,224\text{ bytes}$ (leaving $8,820\text{ bytes}$).
+
+### 9.4 Pacing Timeline, Late-Reset Policy and Stale-DATA Rule
+* **Absolute Monotonic Timeline:** `pacer_reset()` sets `next_tick = now` (`CLOCK_MONOTONIC`) upon `PLAY`, `RESUME`, or `SEEK`, so the first chunk is emitted immediately without an initial 50 ms delay. Subsequent ticks advance strictly by `next_tick += 50,000,000 ns`.
+* **Late-Reset Policy (`> 5` Intervals = 250 ms):** If OS scheduling or TCP back-pressure causes lateness to exceed 5 intervals (250 ms), `pacer_tick_done()` increments `late_resets++` and resets `next_tick = now + 50 ms` to prevent a catch-up burst. **No chunk is ever skipped or dropped**, preserving bit-exact `md5sum` integrity.
+* **Client Stale-DATA Discard Rule:** After transmitting `PAUSE`, `SEEK`, or `STOP`, any `DATA` frames already in flight in the TCP socket buffer prior to the server's `ACK` are stale. Clients MUST ignore incoming `DATA` frames until the corresponding `ACK` frame is received.
+
+---
+
+## 10. Security Notes, Limits and Versioning Policy
+
+* **Filename Validation & Path Traversal Defense:** `session_play()` rejects empty names, lengths `>= 256`, embedded NUL bytes, `'/'`, `'\\'`, `"."`, and `".."`, and enforces `S_ISREG(st.st_mode)` inside `./media` before opening.
+* **Bounded Frame Allocation:** `recv_frame()` enforces `payload_len <= 65536` (`MAX_PAYLOAD_SIZE`) and `payload_len <= buf_cap` prior to reading payload bytes, returning `-4` without draining untrusted bytes so the server sends `ERROR(103)` and closes immediately.
+* **Versioning Policy (v1 vs. v2):** Adding new opcodes, error codes (such as `503 SERVER_BUSY`), or banner text preserves the 16-byte wire header layout and remains compatible under `PROTO_VERSION = 1`. Altering header field offsets, widths, or audio codec framing requires incrementing `PROTO_VERSION` to `2`.
+
+---
+
+## 11. Worked Hex Dumps
+
+All multi-byte header fields below are encoded in **Big-Endian (Network Byte Order)**:
+
+1. **`HELLO` Frame:** `filename/client = "cli-1"` (5 B), `seq = 0`, `param = 0` (21 B total)
+```text
+0000: 57 53 01 01 00 00 00 00  00 00 00 05 00 00 00 00  WS..............
+0010: 63 6C 69 2D 31                                    cli-1
+```
+
+2. **`PLAY` Frame:** `filename = "sample_30s.wav"` (14 B), `start_chunk = 1`, `seq = 1` (30 B total)
+```text
+0000: 57 53 01 04 00 00 00 01  00 00 00 0E 00 00 00 01  WS..............
+0010: 73 61 6D 70 6C 65 5F 33  30 73 2E 77 61 76        sample_30s.wav
+```
+
+3. **`ACK` Frame:** `seq = 1`, `param = 1`, `payload_len = 0` (16 B total)
+```text
+0000: 57 53 01 0A 00 00 00 01  00 00 00 00 00 00 00 01  WS..............
+```
+
+4. **`SEEK` Frame:** `seq = 4`, `target = 100` (`0x00000064`), `payload_len = 0` (16 B total)
+```text
+0000: 57 53 01 06 00 00 00 04  00 00 00 00 00 00 00 64  WS.............d
+```
+
+5. **`DATA` Frame Header:** `seq = 100` (`0x64`), `payload_len = 8820` (`0x2274`), `param = 0` (16 B hdr + 8,820 B PCM)
+```text
+0000: 57 53 01 08 00 00 00 64  00 00 22 74 00 00 00 00  WS.....d.."t....
+```
+
+---
+
+## 12. Change Log (`v1.0` -> `v1.1`)
+
+| Version | Phase | Author | Summary of Changes |
+| :--- | :--- | :--- | :--- |
+| `v1.0` | Session 1 | Member 2 | Initial 16-byte big-endian framing (`0x5753`), `readn`/`writen`, `HELLO`/`WELCOME`/`ECHO`/`LIST`, unpaced `PLAY` (`DATA`..`END`), and error codes `100`–`500`. |
+| `v1.1` | Sessions 2 & 3 | Member 2 | Added `IDLE`/`PLAYING`/`PAUSED` state machine, `PLAY` `start_chunk` & empty-payload `RESUME`, `PAUSE`/`SEEK`/`STOP` semantics with `ACK(param)`, 50 ms `CLOCK_MONOTONIC` pacing & `> 250 ms` late-reset rules, stale-`DATA` discard rule, mandatory client error-reaction matrix, `ERR_SERVER_BUSY` (`503`), and updated banner to `"podflow/1"`. |
