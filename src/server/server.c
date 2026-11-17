@@ -1,5 +1,5 @@
 /*
- * server.c - wav-streamer / PodFlow Session 1 (owner: Member 1)
+ * server.c - PodFlow server (owner: Member 1)
  *
  * Thread-per-client TCP server: HELLO/WELCOME, ECHO, LIST, PLAY (no pacing).
  * Graceful shutdown on SIGINT/SIGTERM.
@@ -29,7 +29,6 @@
 #include <unistd.h>
 
 #define MEDIA_DIR          "media"
-#define SERVER_BANNER      "wav-streamer/1"
 #define LISTEN_BACKLOG     128
 #define WORKER_STACK_BYTES (256 * 1024)  /* big buffers live on the heap */
 #define MAX_NAME_LEN       255
@@ -230,8 +229,8 @@ static int handle_hello(client_ctx_t *c, const frame_hdr_t *h,
     name[n] = '\0';
 
     log_line("INFO", c, "HELLO name='%s'", name);
-    return send_frame(c->fd, MSG_WELCOME, 0, PCM_CHUNK_SIZE, SERVER_BANNER,
-                      (uint32_t)strlen(SERVER_BANNER)) == 0 ? 0 : -1;
+    return send_frame(c->fd, MSG_WELCOME, 0, PCM_CHUNK_SIZE, WELCOME_BANNER,
+                      (uint32_t)strlen(WELCOME_BANNER)) == 0 ? 0 : -1;
 }
 
 static int handle_list(client_ctx_t *c, const frame_hdr_t *h)

@@ -1,32 +1,28 @@
-<<<<<<< HEAD
 # ============================================================================ #
-# PodFlow — Git Ignore Rules                                                   #
+# PodFlow - Git Ignore Rules (merge-conflict markers removed)                  #
 # ============================================================================ #
 
-# 1. Compiled Object Files & Libraries
+# 1. Build output and compiled binaries
+/build/
 *.o
 *.obj
 *.d
 *.a
 *.so
-
-# 2. Compiled Project Binaries (Root & Subdirectories)
+*.out
+*.exe
 /server
 /client
 /test_protocol
-/test_protocol_asan
-/test_protocol_final
+/test_ring_buffer
+/test_session
 /pacing_experiment
-*.out
-*.exe
 
-# 3. Generated WAV Media & Client Output Files
-#    (WAV files are generated locally via: bash media/generate_wav.sh)
-media/*.wav
+# 2. Generated media (create locally with: bash media/generate_wav.sh)
 *.wav
 !media/generate_wav.sh
 
-# 4. Debugging, Sanitizers, Valgrind & Core Dumps
+# 3. Debugging, sanitizers, valgrind, core dumps, logs
 core
 core.*
 vgcore.*
@@ -34,19 +30,18 @@ vgcore.*
 callgrind.out.*
 massif.out.*
 
-# 5. Temporary Packet Captures (Use 'git add -f captures/file.pcapng' for final submission)
+# 4. Packet captures (force-add the final ones: git add -f captures/x.pcapng)
 *.pcap
 *.pcapng
 
-# 6. Python Cache & Virtual Environments (for load_test.py & jitter_analyzer.py)
+# 5. Python
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
 .venv/
 venv/
 
-# 7. Editor, IDE & OS Artifacts (VS Code, WSL2, Windows, macOS)
+# 6. Editor and OS artifacts
 .vscode/
 .idea/
 *.swp
@@ -54,28 +49,5 @@ venv/
 *~
 .DS_Store
 Thumbs.db
-=======
-# File biner hasil kompilasi C
-*.o
-*.a
-*.so
-server
-client
-tests/test_protocol
-tests/pacing_experiment
 
-# File audio WAV (dibuat secara lokal oleh masing-masing anggota)
-media/*.wav
-!media/.gitkeep
-
-# Tangkapan Paket Jaringan
-captures/*.pcap
-!captures/README_captures.md
-!captures/.gitkeep
-
-# Temp / Log
-*.log
-*.tmp
-.vscode/
-.idea/
->>>>>>> 6e0c7e6 (feat(repo): initial skeleton, gitignore, and readme setup)
+# NOTE: results/ (csv + png) is intentionally NOT ignored: it is committed.
