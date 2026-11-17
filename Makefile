@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------
-# wav-streamer / PodFlow - Makefile (owner: Member 1)
+# PodFlow - Makefile (owner: Member 1)
 # Contract flags: C11, -Wall -Wextra -Werror, pthreads, -g
 # -D_POSIX_C_SOURCE=200809L is required: with -std=c11 (strict mode)
 # gcc hides POSIX APIs such as clock_nanosleep() and sigaction().
