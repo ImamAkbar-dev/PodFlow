@@ -1,53 +1,38 @@
-# ============================================================================ #
-# PodFlow - Git Ignore Rules (merge-conflict markers removed)                  #
-# ============================================================================ #
-
-# 1. Build output and compiled binaries
-/build/
+# Compiled binaries and object files
 *.o
-*.obj
-*.d
 *.a
 *.so
-*.out
-*.exe
-/server
-/client
-/test_protocol
-/test_ring_buffer
-/test_session
-/pacing_experiment
+server
+client
+tests/test_protocol
+tests/test_ring_buffer
+tests/test_session
+tests/pacing_experiment
 
-# 2. Generated media (create locally with: bash media/generate_wav.sh)
-*.wav
-!media/generate_wav.sh
+# Generated audio files (too large for Git; generate locally via media/generate_wav.sh)
+media/*.wav
+!media/.gitkeep
 
-# 3. Debugging, sanitizers, valgrind, core dumps, logs
-core
-core.*
-vgcore.*
+# Raw packet captures (too large for Git; keep instructions only)
+captures/*.pcap
+captures/*.pcapng
+!captures/README_captures.md
+!captures/.gitkeep
+
+# Temporary test outputs
+/tmp/*
 *.log
-callgrind.out.*
-massif.out.*
+*.tmp
+out*.wav
 
-# 4. Packet captures (force-add the final ones: git add -f captures/x.pcapng)
-*.pcap
-*.pcapng
+# Keep results CSVs and PNG plots tracked in Git
+!results/
+!results/*.csv
+!results/*.png
+!results/.gitkeep
 
-# 5. Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-venv/
-
-# 6. Editor and OS artifacts
+# Editor directories
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
-# NOTE: results/ (csv + png) is intentionally NOT ignored: it is committed.
+__pycache__/
+*.pyc
