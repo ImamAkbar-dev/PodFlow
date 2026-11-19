@@ -16,6 +16,11 @@
 
 #include "io_utils.h"
 #include "protocol.h"
+#include "io_utils.h"
+
+#ifndef ERR_SERVER_BUSY
+#define ERR_SERVER_BUSY 503
+#endif
 
 #define MAX_PAYLOAD_BUF 65536
 #define MAX_SCRIPT_CMDS 64
