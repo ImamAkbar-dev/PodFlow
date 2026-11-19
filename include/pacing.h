@@ -1,29 +1,76 @@
-#ifndef PACING_H
-#define PACING_H
+/**
+ * @file pacing.h
+ * @brief Absolute-time pacer (one chunk per 50 ms) for the PodFlow sender loop.
+ *
+ * Owner: Member 1 (Socket Core, Pacing, Server). Frozen API: contract v1.1.
+ *
+ * Timeline model: tick k is due at  t_anchor + k * interval_ns, where
+ * t_anchor is the CLOCK_MONOTONIC time of pacer_init()/pacer_reset().
+ * Tick 0 is due immediately, so the first chunk goes out at once after a
+ * (re)start, resume or seek. Every deadline is computed from the previous
+ * DEADLINE, never from "now", so wake-up latency and send time cannot add up
+ * to drift.
+ *
+ * Typical use inside the connection thread (see server.c):
+ *
+ *     pacer_reset(&p);                        // PLAY / resume / seek
+ *     ...
+ *     pacer_timeout(&p, &ts);                 // ppoll() timeout (0 if due)
+ *     if (due && session_next(...) == 1) {    // there is a chunk to send
+ *         send_frame(...);
+ *         pacer_tick_done(&p);                // only after a real send
+ *     }                                       // underrun: do NOT call it
+ *
+ * Not thread-safe: one pacer_t belongs to exactly one thread.
+ */
+#ifndef PODFLOW_PACING_H
+#define PODFLOW_PACING_H
 
+#include <stdint.h>
 #include <time.h>
 
-/* 50 ms = one chunk of 8820 bytes at 176400 bytes/s */
+/** 50 ms = one chunk of 8820 bytes at 176400 bytes/s. */
 #define PACING_DEFAULT_INTERVAL_NS 50000000L
 
-/* If we fall more than this many intervals behind (e.g. after a PAUSE or a
- * long stall), re-anchor the schedule instead of sending a burst to "catch up". */
-#define PACING_MAX_CATCHUP_TICKS 10
+/** Late-reset rule: lateness above this many intervals re-anchors the schedule. */
+#define PACING_MAX_LATE_TICKS 5
 
 typedef struct {
-    struct timespec next_tick;   /* absolute CLOCK_MONOTONIC time of the next tick */
-    long            interval_ns; /* distance between ticks, in nanoseconds         */
+    struct timespec next_tick;      /* absolute CLOCK_MONOTONIC deadline of the pending tick */
+    long            interval_ns;    /* distance between ticks (nanoseconds)                   */
+    uint64_t        ticks;          /* completed ticks (pacer_tick_done calls)                */
+    uint64_t        late_resets;    /* times the late-reset rule re-anchored the schedule     */
+    long long       lateness_sum_ns;/* sum of per-tick lateness                               */
+    long long       lateness_max_ns;/* worst per-tick lateness                                */
 } pacer_t;
 
-/* Start a schedule "now". interval_ns <= 0 selects the 50 ms default.
- * The first pacer_wait_next() returns one interval after this call. */
+/** Start a schedule now. interval_ns <= 0 selects the 50 ms default. Zeroes the stats. */
 void pacer_init(pacer_t *p, long interval_ns);
 
-/* Sleep until the next absolute tick (next_tick += interval_ns).
- * Returns how late we woke up, in nanoseconds (>= 0). Callers may ignore it. */
-long pacer_wait_next(pacer_t *p);
-
-/* Re-anchor the schedule to "now" (use after PAUSE/SEEK in Session 2). */
+/** Re-anchor: next_tick = now (tick due immediately). Statistics are kept. */
 void pacer_reset(pacer_t *p);
 
-#endif /* PACING_H */
+/**
+ * Time left until the pending tick, clamped to >= 0, written to *out
+ * (suitable as a ppoll() timeout).
+ * @return 1 if the tick is due now (*out = 0), 0 otherwise.
+ */
+int pacer_timeout(const pacer_t *p, struct timespec *out);
+
+/**
+ * Call right after the chunk of the pending tick was sent.
+ * lateness = now - next_tick (>= 0) is recorded; for the server this includes the
+ * send time, i.e. "how late the chunk was completed". Then next_tick += interval.
+ * Late-reset rule: if lateness > PACING_MAX_LATE_TICKS * interval, next_tick is
+ * re-anchored to now + interval and late_resets++ (never a burst, never a skip).
+ */
+void pacer_tick_done(pacer_t *p);
+
+/**
+ * Blocking variant: clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME) until the
+ * pending tick (retrying on EINTR), then pacer_tick_done(). Used by the
+ * experiment; the server waits with ppoll() instead so it can also read commands.
+ */
+void pacer_wait_next(pacer_t *p);
+
+#endif /* PODFLOW_PACING_H */

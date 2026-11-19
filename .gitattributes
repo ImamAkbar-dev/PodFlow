@@ -1,0 +1,13 @@
+# Force LF in the repository and in every checkout (Windows + WSL2 safe).
+* text=auto eol=lf
+*.sh  text eol=lf
+*.py  text eol=lf
+*.c   text eol=lf
+*.h   text eol=lf
+Makefile text eol=lf
+
+# Binary files: never touch line endings.
+*.wav     binary
+*.png     binary
+*.pcap    binary
+*.pcapng  binary
