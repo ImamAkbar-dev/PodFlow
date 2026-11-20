@@ -1,0 +1,4 @@
+t_s,clients,streaming,chunks_sent,underruns,late_resets,max_lateness_us
+1,200,200,3674,0,0,4910
+2,200,200,7674,0,0,677
+3,0,0,9600,0,0,720

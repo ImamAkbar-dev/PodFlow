@@ -1,0 +1,35 @@
+{
+  "scenario": "n_100",
+  "n_clients": 100,
+  "wav_file": "sample_tail.wav",
+  "elapsed_s": 2.512,
+  "failed_clients": 0,
+  "md5_mismatches": 0,
+  "md5_all_match": true,
+  "jitter_ms": {
+    "count": 4700,
+    "mean": 0.07611006191489363,
+    "p50": 0.048533,
+    "p95": 0.1661317500000001,
+    "p99": 0.9173092700000044,
+    "max": 3.266279
+  },
+  "sync_skew_ms": {
+    "count": 48,
+    "mean": 107.8917354375,
+    "p50": 107.9439035,
+    "p95": 108.0348927,
+    "p99": 108.12271478,
+    "max": 108.178187
+  },
+  "server_resources": {
+    "cpu_avg_pct": 34.48,
+    "cpu_max_pct": 51.98,
+    "rss_max_mb": 46.13
+  },
+  "server_telemetry": {
+    "underruns": 0,
+    "late_resets": 0,
+    "max_lateness_us": 3686
+  }
+}

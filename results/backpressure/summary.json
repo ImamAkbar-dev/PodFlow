@@ -1,0 +1,7 @@
+{
+  "scenario": "backpressure_5s_timeout",
+  "healthy_clients_total": 5,
+  "healthy_clients_md5_ok": 5,
+  "stalled_client_dropped_by_server": false,
+  "stalled_drop_elapsed_s": 0.0
+}
