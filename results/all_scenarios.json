@@ -1,0 +1,184 @@
+[
+  {
+    "scenario": "n_1",
+    "n_clients": 1,
+    "wav_file": "sample_tail.wav",
+    "elapsed_s": 2.432,
+    "failed_clients": 0,
+    "md5_mismatches": 0,
+    "md5_all_match": true,
+    "jitter_ms": {
+      "count": 47,
+      "mean": 0.20772170212765956,
+      "p50": 0.075108,
+      "p95": 0.9131744999999996,
+      "p99": 1.4514864,
+      "max": 1.459886
+    },
+    "sync_skew_ms": {
+      "count": 0,
+      "mean": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "server_resources": {
+      "cpu_avg_pct": 1.0,
+      "cpu_max_pct": 1.0,
+      "rss_max_mb": 2.37
+    },
+    "server_telemetry": {
+      "underruns": 0,
+      "late_resets": 0,
+      "max_lateness_us": 1358
+    }
+  },
+  {
+    "scenario": "n_10",
+    "n_clients": 10,
+    "wav_file": "sample_tail.wav",
+    "elapsed_s": 2.445,
+    "failed_clients": 0,
+    "md5_mismatches": 0,
+    "md5_all_match": true,
+    "jitter_ms": {
+      "count": 470,
+      "mean": 0.14898681489361704,
+      "p50": 0.09019150000000001,
+      "p95": 0.525425399999999,
+      "p99": 0.77726122,
+      "max": 1.519646
+    },
+    "sync_skew_ms": {
+      "count": 48,
+      "mean": 14.816559416666669,
+      "p50": 14.859465499999999,
+      "p95": 15.17120285,
+      "p99": 15.34614011,
+      "max": 15.389562
+    },
+    "server_resources": {
+      "cpu_avg_pct": 7.49,
+      "cpu_max_pct": 9.99,
+      "rss_max_mb": 6.35
+    },
+    "server_telemetry": {
+      "underruns": 0,
+      "late_resets": 0,
+      "max_lateness_us": 1759
+    }
+  },
+  {
+    "scenario": "n_50",
+    "n_clients": 50,
+    "wav_file": "sample_tail.wav",
+    "elapsed_s": 2.529,
+    "failed_clients": 0,
+    "md5_mismatches": 0,
+    "md5_all_match": true,
+    "jitter_ms": {
+      "count": 2350,
+      "mean": 0.13482901872340425,
+      "p50": 0.0654525,
+      "p95": 0.2914921499999994,
+      "p99": 1.5807604099999837,
+      "max": 10.397988
+    },
+    "sync_skew_ms": {
+      "count": 48,
+      "mean": 119.97478410416666,
+      "p50": 120.0324785,
+      "p95": 120.1724486,
+      "p99": 120.32179844,
+      "max": 120.446042
+    },
+    "server_resources": {
+      "cpu_avg_pct": 32.48,
+      "cpu_max_pct": 49.98,
+      "rss_max_mb": 24.05
+    },
+    "server_telemetry": {
+      "underruns": 0,
+      "late_resets": 0,
+      "max_lateness_us": 10767
+    }
+  },
+  {
+    "scenario": "n_100",
+    "n_clients": 100,
+    "wav_file": "sample_tail.wav",
+    "elapsed_s": 2.559,
+    "failed_clients": 0,
+    "md5_mismatches": 0,
+    "md5_all_match": true,
+    "jitter_ms": {
+      "count": 4700,
+      "mean": 0.12582486127659576,
+      "p50": 0.057360499999999995,
+      "p95": 0.25395365000000025,
+      "p99": 1.6279442200000027,
+      "max": 13.241251
+    },
+    "sync_skew_ms": {
+      "count": 48,
+      "mean": 154.624000625,
+      "p50": 154.6458455,
+      "p95": 154.8211215,
+      "p99": 155.06923795,
+      "max": 155.161177
+    },
+    "server_resources": {
+      "cpu_avg_pct": 50.98,
+      "cpu_max_pct": 79.98,
+      "rss_max_mb": 46.14
+    },
+    "server_telemetry": {
+      "underruns": 0,
+      "late_resets": 0,
+      "max_lateness_us": 13444
+    }
+  },
+  {
+    "scenario": "n_200",
+    "n_clients": 200,
+    "wav_file": "sample_tail.wav",
+    "elapsed_s": 2.704,
+    "failed_clients": 0,
+    "md5_mismatches": 0,
+    "md5_all_match": true,
+    "jitter_ms": {
+      "count": 9400,
+      "mean": 0.2045836859574468,
+      "p50": 0.042526499999999995,
+      "p95": 0.4684469999999998,
+      "p99": 4.923813180000021,
+      "max": 15.248773
+    },
+    "sync_skew_ms": {
+      "count": 48,
+      "mean": 296.6561434166667,
+      "p50": 296.6993065,
+      "p95": 296.8541877,
+      "p99": 297.04672698,
+      "max": 297.207028
+    },
+    "server_resources": {
+      "cpu_avg_pct": 64.64,
+      "cpu_max_pct": 121.97,
+      "rss_max_mb": 89.64
+    },
+    "server_telemetry": {
+      "underruns": 0,
+      "late_resets": 0,
+      "max_lateness_us": 14966
+    }
+  },
+  {
+    "scenario": "backpressure_5s_timeout",
+    "healthy_clients_total": 5,
+    "healthy_clients_md5_ok": 5,
+    "stalled_client_dropped_by_server": false,
+    "stalled_drop_elapsed_s": 0.0
+  }
+]
