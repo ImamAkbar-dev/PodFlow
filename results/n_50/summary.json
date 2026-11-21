@@ -2,34 +2,34 @@
   "scenario": "n_50",
   "n_clients": 50,
   "wav_file": "sample_tail.wav",
-  "elapsed_s": 2.486,
+  "elapsed_s": 2.529,
   "failed_clients": 0,
   "md5_mismatches": 0,
   "md5_all_match": true,
   "jitter_ms": {
     "count": 2350,
-    "mean": 0.17063384382978722,
-    "p50": 0.1228515,
-    "p95": 0.47525719999999927,
-    "p99": 0.8149122399999995,
-    "max": 2.570136
+    "mean": 0.13482901872340425,
+    "p50": 0.0654525,
+    "p95": 0.2914921499999994,
+    "p99": 1.5807604099999837,
+    "max": 10.397988
   },
   "sync_skew_ms": {
     "count": 48,
-    "mean": 80.58812310416667,
-    "p50": 80.56114500000001,
-    "p95": 80.91715074999999,
-    "p99": 81.22156527,
-    "max": 81.405739
+    "mean": 119.97478410416666,
+    "p50": 120.0324785,
+    "p95": 120.1724486,
+    "p99": 120.32179844,
+    "max": 120.446042
   },
   "server_resources": {
-    "cpu_avg_pct": 34.46,
-    "cpu_max_pct": 44.98,
+    "cpu_avg_pct": 32.48,
+    "cpu_max_pct": 49.98,
     "rss_max_mb": 24.05
   },
   "server_telemetry": {
     "underruns": 0,
     "late_resets": 0,
-    "max_lateness_us": 2917
+    "max_lateness_us": 10767
   }
 }
