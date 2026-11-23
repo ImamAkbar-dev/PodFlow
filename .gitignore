@@ -1,15 +1,23 @@
-# Compiled binaries and object files
+# ============================================================================ #
+# PodFlow - Git ignore rules                                                   #
+# ============================================================================ #
+
+# Build output (anchored with "/": src/server and src/client are NOT ignored)
+/build/
 *.o
+*.d
 *.a
 *.so
-server
-client
-tests/test_protocol
-tests/test_ring_buffer
-tests/test_session
-tests/pacing_experiment
+/server
+/client
+/server_stub
+/test_protocol
+/test_ring_buffer
+/test_session
+/pacing_experiment
+/test_media_tmp/
 
-# Generated audio files (too large for Git; generate locally via media/generate_wav.sh)
+# Generated audio files (too large for Git; generate with media/generate_wav.sh)
 media/*.wav
 !media/.gitkeep
 
@@ -19,20 +27,23 @@ captures/*.pcapng
 !captures/README_captures.md
 !captures/.gitkeep
 
-# Temporary test outputs
-/tmp/*
+# Core dumps, logs, temporary outputs
+core
+core.*
+vgcore.*
 *.log
 *.tmp
 out*.wav
 
-# Keep results CSVs and PNG plots tracked in Git
-!results/
-!results/*.csv
-!results/*.png
-!results/.gitkeep
+# results/ (csv, json, png) is committed on purpose: nothing to ignore there
 
-# Editor directories
-.vscode/
-.idea/
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
