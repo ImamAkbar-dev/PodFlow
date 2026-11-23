@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PodFlow — Streaming Audio Player</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="spotify-shell">
+        <!-- TOP BAR -->
+        <header class="top-bar">
+            <div class="brand-area">
+                <div class="logo-dot"></div>
+                <span class="brand-title">PodFlow</span>
+            </div>
+
+            <div class="search-pill">
+                <span class="search-icon">&#128269;</span>
+                <input type="text" id="search-input" placeholder="Apa yang ingin kamu putar? (Filter episode...)" autocomplete="off">
+            </div>
+
+            <div class="top-status">
+                <span id="ws-badge" class="pill-badge badge-offline">WS: Disconnected</span>
+                <button id="btn-ping" class="btn-ghost" disabled title="Ukur latency ECHO">Ping (ECHO)</button>
+            </div>
+        </header>
+
+        <!-- ERROR BANNER (Muncul saat server mengirim ERROR 200/202/300/503) -->
+        <div id="error-banner" class="error-banner hidden" role="alert">
+            <span id="error-text"></span>
+            <div class="error-actions">
+                <button id="btn-retry" class="btn-spotify-sm hidden">Coba Lagi</button>
+                <button id="btn-dismiss-err" class="btn-close">&times;</button>
+            </div>
+        </div>
+
+        <!-- 3-COLUMN WORKSPACE -->
+        <div class="workspace">
+            <!-- KOLOM KIRI: KOLEKSI EPISODE -->
+            <aside class="panel left-sidebar">
+                <div class="panel-header">
+                    <h2>Koleksi Kamu</h2>
+                    <button id="btn-refresh-catalog" class="btn-icon" title="Muat ulang katalog">&#8635;</button>
+                </div>
+                <div class="filter-chips">
+                    <span class="chip active">Podcast &amp; WAV</span>
+                    <span class="chip">PCM 44.1kHz</span>
+                </div>
+                <ul id="episode-list" class="episode-list">
+                    <li class="empty-msg">Memuat daftar episode dari /api/catalog...</li>
+                </ul>
+            </aside>
+
+            <!-- KOLOM TENGAH: MAIN FEED & TELEMETRI -->
+            <main class="panel center-feed">
+                <div class="hero-banner">
+                    <div class="hero-art">
+                        <span>&#9835;</span>
+                    </div>
+                    <div class="hero-meta">
+                        <span class="hero-tag">CONCURRENT CHUNKED STREAMING</span>
+                        <h1>PodFlow Audio Engine</h1>
+                        <p>Protokol Biner 16-Byte Big-Endian &bull; WebSocket &harr; TCP Port 8888</p>
+                    </div>
+                </div>
+
+                <section class="section-block">
+                    <div class="section-title-row">
+                        <h3>Telemetri &amp; Statistik Server</h3>
+                        <span class="disclaimer-tag">Peraga, bukan data benchmark resmi</span>
+                    </div>
+                    <div id="charts-container" class="charts-grid">
+                        <div class="chart-card">
+                            <span class="chart-title">Level Jitter Buffer &amp; Inter-Arrival</span>
+                            <canvas id="buffer-chart" height="130"></canvas>
+                        </div>
+                        <div class="chart-card">
+                            <span class="chart-title">Beban Server &amp; Sesi Aktif</span>
+                            <canvas id="server-stats-chart" height="130"></canvas>
+                        </div>
+                    </div>
+                </section>
+            </main>
+
+            <!-- KOLOM KANAN: SEDANG DIPUTAR (NOW PLAYING) -->
+            <aside class="panel right-now-playing">
+                <div class="panel-header">
+                    <h2>Sedang Diputar</h2>
+                    <span id="fsm-badge" class="pill-badge badge-idle">STATE: IDLE</span>
+                </div>
+
+                <div class="cover-showcase">
+                    <div class="cover-box" id="cover-art-box">
+                        <span class="cover-wave">&#127911;</span>
+                        <span class="cover-sub">PCM STEREO 16-BIT</span>
+                    </div>
+                </div>
+
+                <div class="track-details">
+                    <h3 id="active-track-name" class="track-title-lg">Belum ada episode dipilih</h3>
+                    <p class="track-artist">PodFlow Streamer &bull; 50 ms Pacing (20 chunk/s)</p>
+                </div>
+
+                <div class="telemetry-cards">
+                    <div class="t-card">
+                        <span class="t-label">Jitter Buffer (Prebuffer)</span>
+                        <span id="metric-buffer" class="t-value">0 ms</span>
+                    </div>
+                    <div class="t-card">
+                        <span class="t-label">Jitter RFC 3550 (Peraga)</span>
+                        <span id="metric-jitter" class="t-value">0.00 ms</span>
+                    </div>
+                    <div class="t-card">
+                        <span class="t-label">Round-Trip Time (ECHO)</span>
+                        <span id="metric-rtt" class="t-value">- ms</span>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <!-- BOTTOM PLAYER BAR (ALA SPOTIFY) -->
+        <footer class="player-bar">
+            <!-- Kiri: Info Track Mini -->
+            <div class="pb-left">
+                <div class="mini-thumb">&#9834;</div>
+                <div class="mini-info">
+                    <span id="pb-track-title" class="mini-title">Pilih episode di Koleksi</span>
+                    <span id="chunk-indicator" class="mini-sub">Chunk: 0 / 0</span>
+                </div>
+            </div>
+
+            <!-- Tengah: Tombol Kontrol & Seek Bar -->
+            <div class="pb-center">
+                <div class="transport-buttons">
+                    <button id="btn-stop" class="ctrl-btn" disabled title="Stop (Hentikan)">&#9632;</button>
+                    <button id="btn-play" class="ctrl-btn-main" disabled title="Play">&#9654;</button>
+                    <button id="btn-pause" class="ctrl-btn-main" disabled title="Pause" style="display:none;">&#10074;&#10074;</button>
+                    <button id="btn-resume" class="ctrl-btn" disabled title="Resume (Lanjutkan)">&#9654;&#10074;</button>
+                </div>
+
+                <div class="progress-wrapper">
+                    <span id="time-current" class="time-label">00:00.0</span>
+                    <input type="range" id="seek-slider" min="1" max="1" value="1" disabled>
+                    <span id="time-total" class="time-label">00:00.0</span>
+                </div>
+            </div>
+
+            <!-- Kanan: Info Teknis Stream -->
+            <div class="pb-right">
+                <span class="bitrate-badge">1411 kbps WAV</span>
+            </div>
+        </footer>
+    </div>
+
+    <script type="module" src="js/main.js"></script>
+</body>
+</html>
