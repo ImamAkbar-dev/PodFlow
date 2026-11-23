@@ -37,27 +37,27 @@ Gateway hanya meneruskan frame 16-byte apa adanya. Batasan web dicatat di `../Ke
 **Selesai bila:** tag dan branch ada, dan baseline tes inti hijau.
 
 ### Tahap 1 - Lapisan protokol di gateway
-- [ ] Cocokkan tata letak header dengan `docs/protocol_spec.md` bagian 4 (urutan dan lebar field, big-endian).
-- [ ] `gateway/protocol.py`: `pack_frame()` dan `recv_frame()` (validasi magic, versi, `payload_len <= 65536`).
-- [ ] Tes unit untuk frame yang valid dan yang rusak.
-- [ ] `tests/test_protocol_parity.py`: parse `include/protocol.h` dan bandingkan dengan konstanta di `protocol.py` dan `web/js/protocol.js`.
+- [x] Cocokkan tata letak header dengan `docs/protocol_spec.md` bagian 4 (urutan dan lebar field, big-endian).
+- [x] `gateway/protocol.py`: `pack_frame()` dan `recv_frame()` (validasi magic, versi, `payload_len <= 65536`).
+- [x] Tes unit untuk frame yang valid dan yang rusak.
+- [x] `tests/test_protocol_parity.py`: parse `include/protocol.h` dan bandingkan dengan konstanta di `protocol.py` dan `web/js/protocol.js`.
 
 **Selesai bila:** gateway bisa HELLO -> WELCOME dan ECHO ke server nyata, dan tes paritas lolos.
 
 ### Tahap 2 - Sesi gateway
-- [ ] `gateway/session.py`: satu koneksi TCP per WebSocket; teruskan frame dua arah apa adanya.
-- [ ] Backpressure: berhenti membaca TCP saat buffer WebSocket tinggi, lanjutkan saat longgar.
-- [ ] Aturan stale-DATA: abaikan `DATA` setelah PAUSE/SEEK/STOP sampai `ACK` diterima.
-- [ ] Penanganan `ERROR`: teruskan ke browser; tutup sesi pada 100/101/103/503.
-- [ ] Bersihkan sumber daya saat tab ditutup (kirim `STOP`, tutup soket).
-- [ ] `tests/test_gateway.py`: PLAY lewat WebSocket, hitung total byte, cocokkan dengan `END.param` (sudah termasuk 44 byte header).
+- [x] `gateway/session.py`: satu koneksi TCP per WebSocket; teruskan frame dua arah apa adanya.
+- [x] Backpressure: berhenti membaca TCP saat buffer WebSocket tinggi, lanjutkan saat longgar.
+- [x] Aturan stale-DATA: abaikan `DATA` setelah PAUSE/SEEK/STOP sampai `ACK` diterima.
+- [x] Penanganan `ERROR`: teruskan ke browser; tutup sesi pada 100/101/103/503.
+- [x] Bersihkan sumber daya saat tab ditutup (kirim `STOP`, tutup soket).
+- [x] `tests/test_gateway.py`: PLAY lewat WebSocket, hitung total byte, cocokkan dengan `END.param` (sudah termasuk 44 byte header).
 
 **Selesai bila:** satu sesi PLAY sampai END dengan total byte cocok, dan PAUSE/SEEK/STOP tidak menghasilkan DATA basi.
 
 ### Tahap 3 - Katalog dan server web
 - [ ] `gateway/gateway.py`: layani `web/`, endpoint `/ws` dan `/api/catalog`.
-- [ ] `gateway/catalog.py`: nama episode dari `LIST` (ACK berisi nama `*.wav` dipisah baris baru).
-- [ ] Durasi sebagai pelengkap: dari header WAV (`DATA seq=0`) atau ukuran file; 1 chunk = 50 ms, 20 chunk per detik.
+- [x] `gateway/catalog.py`: nama episode dari `LIST` (ACK berisi nama `*.wav` dipisah baris baru).
+- [x] Durasi sebagai pelengkap: dari header WAV (`DATA seq=0`) atau ukuran file; 1 chunk = 50 ms, 20 chunk per detik.
 
 **Selesai bila:** `/api/catalog` mengembalikan daftar episode dari server.
 
