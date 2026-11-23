@@ -74,12 +74,12 @@ Tujuh kolom pertama sama dengan CSV statistik server. `cpu_pct`, `rss_kb` dan `w
 | `README.md`, `Tugas.md` | Pemelihara dokumen rencana. |
 
 **Selesai bila:**
-- [ ] HELLO -> WELCOME, ECHO, LIST berhasil lewat gateway ke server nyata.
-- [ ] PLAY sampai END dengan total byte cocok.
-- [ ] PAUSE, SEEK, STOP tidak menghasilkan DATA basi.
-- [ ] Klien lambat tetap memicu backpressure ke server (diuji dengan `tests/slow_client.py`).
-- [ ] 503 menutup WebSocket dengan kode 4503.
-- [ ] `make -C ui test` hijau.
+- [x] HELLO -> WELCOME, ECHO, LIST berhasil lewat gateway ke server nyata.
+- [x] PLAY sampai END dengan total byte cocok.
+- [x] PAUSE, SEEK, STOP tidak menghasilkan DATA basi.
+- [x] Klien lambat tetap memicu backpressure ke server (diuji dengan `tests/slow_client.py`).
+- [x] 503 menutup WebSocket dengan kode 4503.
+- [x] `make -C ui test` hijau.
 
 ### 3.2 Rafly (Anggota 1): server web, statistik, operasional
 **Branch:** `feat/ui-m1-gateway-stats`
